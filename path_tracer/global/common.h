@@ -25,3 +25,27 @@ template<class T> using Mat4 = Mat<T, 4, 4>;
 using Mat2f = Mat2<float>;
 using Mat3f = Mat3<float>;
 using Mat4f = Mat4<float>;
+
+/// @brief Orthonormal Basis: https://graphics.pixar.com/library/OrthonormalB/paper.pdf
+/// @param v 
+/// @return 
+inline std::tuple<Vec3f, Vec3f> coordinate_system(const Vec3f& v){
+    float sign = copysignf(1.0f, v.z());
+    const float a = -1.0f / (sign + v.z());
+    const float b = v.x() * v.y() * a;
+
+    return {
+        Vec3f(1.0f + sign * v.x() * v.x() * a, sign * b, -sign * v.x()),
+        Vec3f(b, sign + v.y() * v.y() * a, -v.y())
+    };
+}
+
+inline Vec3f local_to_world(const Vec3f& v, const Vec3f& n){
+    auto [x, y] = coordinate_system(n);
+    return v.x() * x + v.y() * y + v.z() * n;
+}
+
+inline Vec3f world_to_local(const Vec3f& v, const Vec3f& n){
+    auto [x, y] = coordinate_system(n);
+    return Vec3f(v.dot(x), v.dot(y), v.dot(n));
+}
