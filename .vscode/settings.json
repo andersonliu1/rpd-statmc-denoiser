@@ -1,0 +1,12 @@
+{
+    "C_Cpp.default.includePath": [
+        "${workspaceFolder}",
+        "${workspaceFolder}/path_tracer",
+        "${workspaceFolder}/extern/stb",
+        "${workspaceFolder}/extern/tinyobjloader",
+        "${workspaceFolder}/extern/CLI11/include",
+        "${workspaceFolder}/extern/spdlog/include",
+        "${workspaceFolder}/extern/yaml-cpp/include",
+        "${workspaceFolder}/extern/eigen"
+    ]
+}
