@@ -1,10 +1,16 @@
 #pragma once
 
-#include "scene.h"
+#include <stdexcept>
 #include <string>
 
-namespace scene_loader {
+#include "scene.h"
 
-Scene load_scene(const std::string& scene_file, const std::string& asset_root);
+#include "scenes/registry.h"
 
-} // namespace scene_loader
+namespace scenes {
+
+inline Scene load_scene(const std::string& scene_name) {
+    return make_scene(scene_name);
+}
+
+} // namespace scenes

@@ -14,13 +14,12 @@ make
 ## Run
 
 ```bash
-./mcdenoise -c config/test.yaml --asset-root assets --scene scenes/test_scene.yaml -o output.png
+./path_tracer -c config/test.yaml --scene cornell_box -o output.png
 ```
 
 Arguments:
 - `-c, --config`: Image + camera + sampling settings.
-- `--asset-root`: Root folder for OBJ files referenced by scene meshes.
-- `--scene`: Scene YAML under `scenes/` describing objects.
+- `--scene`: Built-in scene to render (e.g., `cornell_box`, `debug`).
 - `-o, --output`: Output PNG path.
 - `--seed`: Optional sampler RNG seed (defaults to random).
 

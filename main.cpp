@@ -27,6 +27,8 @@ struct RenderConfig {
     int max_depth;
     float gamma;
     float fov;
+    float focus_distance;
+    float aperture;
     Vec3f camera_position;
     Vec3f camera_lookat;
 };
@@ -42,7 +44,8 @@ Vec3f trace_ray(const Ray& ray, const Scene& scene, int depth) {
         float ndotl = std::max(0.0f, hit.normal.dot(light_dir));
 
         Vec3f ambient = Vec3f(0.1f, 0.1f, 0.1f);
-        Vec3f diffuse = hit.material->albedo * ndotl;
+        Vec3f albedo = hit.material ? hit.material->albedo : Vec3f(1.0f, 1.0f, 1.0f);
+        Vec3f diffuse = albedo * ndotl;
 
         return ambient + diffuse;
     }
@@ -69,6 +72,12 @@ RenderConfig parse_render_config(const YAML::Node& config) {
 
     render_config.camera_position = Vec3f(cam_pos[0], cam_pos[1], cam_pos[2]);
     render_config.camera_lookat = Vec3f(cam_lookat[0], cam_lookat[1], cam_lookat[2]);
+    render_config.focus_distance = config["focus_distance"]
+        ? config["focus_distance"].as<float>()
+        : (render_config.camera_lookat - render_config.camera_position).norm();
+    render_config.aperture = config["aperture"]
+        ? config["aperture"].as<float>()
+        : 0.0f;
 
     return render_config;
 }
@@ -76,7 +85,14 @@ RenderConfig parse_render_config(const YAML::Node& config) {
 Camera build_camera(const RenderConfig& config) {
     Camera camera;
     float aspect_ratio = static_cast<float>(config.image_width) / config.image_height;
-    camera.initialize(config.camera_position, config.camera_lookat, Vec3f(0, 1, 0), config.fov, aspect_ratio);
+    camera.init(
+        config.camera_position,
+        config.camera_lookat,
+        Vec3f(0, 1, 0),
+        config.fov,
+        aspect_ratio,
+        config.focus_distance,
+        config.aperture);
     return camera;
 }
 
@@ -144,14 +160,12 @@ int main(int argc, char** argv) {
     CLI::App app{"Monte Carlo path tracer with denoising"};
 
     std::string config_file;
-    std::string asset_root;
-    std::string scene_file;
+    std::string scene_name;
     std::string output_file;
     std::optional<uint32_t> sampler_seed;
 
     app.add_option("-c,--config", config_file, "Path to config YAML file")->required();
-    app.add_option("--asset-root", asset_root, "Root directory for assets")->required();
-    app.add_option("--scene", scene_file, "Path to scene YAML file")->required();
+    app.add_option("--scene", scene_name, "Name of the built-in scene to render (e.g., cornell_box, debug)")->required();
     app.add_option("-o,--output", output_file, "Output PNG file path")->required();
     app.add_option("--seed", sampler_seed, "Optional RNG seed for the sampler");
 
@@ -177,18 +191,17 @@ int main(int argc, char** argv) {
     spdlog::info("Samples per pixel: {}", render_config.samples_per_pixel);
     spdlog::info("Max depth: {}", render_config.max_depth);
     spdlog::info("Camera position: [{}, {}, {}]", render_config.camera_position.x(), render_config.camera_position.y(), render_config.camera_position.z());
-    spdlog::info("Asset root: {}", asset_root);
-    spdlog::info("Scene file: {}", scene_file);
+    spdlog::info("Scene: {}", scene_name);
 
     Scene scene;
     try {
-        scene = scene_loader::load_scene(scene_file, asset_root);
+        scene = scenes::load_scene(scene_name);
     } catch (const std::exception& e) {
-        spdlog::error("Failed to load scene {}: {}", scene_file, e.what());
+        spdlog::error("Failed to load scene '{}': {}", scene_name, e.what());
         return 1;
     }
 
-    spdlog::info("Loaded scene with {} objects", scene.object_count());
+    spdlog::info("Loaded scene with {} triangles and {} materials", scene.triangle_count(), scene.material_count());
 
     Camera camera = build_camera(render_config);
 

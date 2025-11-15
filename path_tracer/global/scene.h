@@ -1,38 +1,50 @@
 #pragma once
 
-#include "objects/scene_object.h"
 #include <limits>
-#include <memory>
-#include <utility>
 #include <vector>
 
-class Scene {
-public:
-    void add_object(std::unique_ptr<SceneObject> object) {
-        objects_.push_back(std::move(object));
+#include "intersection.h"
+#include "material.h"
+#include "ray.h"
+#include "triangle.h"
+
+struct Scene {
+    int add_material(const Material& material) {
+        materials.push_back(material);
+        return static_cast<int>(materials.size() - 1);
+    }
+
+    void add_triangle(const Triangle& triangle) {
+        triangles.push_back(triangle);
     }
 
     bool intersect(const Ray& ray, HitRecord& hit) const {
         bool hit_anything = false;
-        float closest = std::numeric_limits<float>::infinity();
+        float closest = hit.t;
 
-        for (const auto& object : objects_) {
-            HitRecord local_hit;
-            if (object->intersect(ray, local_hit) && local_hit.t < closest) {
-                closest = local_hit.t;
-                hit = local_hit;
+        for (const auto& tri : triangles) {
+            auto [did_hit, t] = Triangle::ray_triangle_intersect(tri, ray.origin, ray.direction, EPS, closest);
+            if (did_hit && t < closest) {
+                closest = t;
+                hit.t = t;
+                hit.point = ray.at(t);
+                hit.normal = tri.normal;
+                hit.material = (tri.material_id >= 0 && tri.material_id < static_cast<int>(materials.size()))
+                    ? const_cast<Material*>(&materials[tri.material_id])
+                    : nullptr;
+                hit.hit = true;
                 hit_anything = true;
             }
         }
 
         hit.hit = hit_anything;
+
         return hit_anything;
     }
 
-    size_t object_count() const {
-        return objects_.size();
-    }
+    size_t triangle_count() const { return triangles.size(); }
+    size_t material_count() const { return materials.size(); }
 
-private:
-    std::vector<std::unique_ptr<SceneObject>> objects_;
+    std::vector<Triangle> triangles;
+    std::vector<Material> materials;
 };
