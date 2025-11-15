@@ -1,0 +1,19 @@
+objects:
+  - type: mesh
+    path: quad.obj
+    transform:
+      translation: [0.0, 0.0, 0.0]
+      rotation: [0.0, 0.0, 30.0]
+      scale: [1.0, 1.0, 1.0]
+    material:
+      albedo: [0.7, 0.7, 0.7]
+      roughness: 0.5
+  - type: sphere
+    radius: 0.25
+    transform:
+      translation: [0.0, 0.15, 0.0]
+      rotation: [0.0, 0.0, 0.0]
+      scale: [1.0, 1.0, 1.0]
+    material:
+      albedo: [0.2, 0.8, 0.2]
+      roughness: 0.3

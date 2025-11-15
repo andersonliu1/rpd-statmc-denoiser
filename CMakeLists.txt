@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 
 project(mcdenoise LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_subdirectory(extern/spdlog)
@@ -13,7 +13,10 @@ add_subdirectory(extern/yaml-cpp)
 
 add_subdirectory(extern/eigen)
 
-add_executable(mcdenoise main.cpp)
+add_executable(mcdenoise
+    main.cpp
+    path_tracer/global/scene_loader.cpp
+)
 
 target_include_directories(mcdenoise PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/path_tracer

@@ -1,14 +1,15 @@
 #pragma once
 
-#include "common.h"
-#include "triangle.h"
-#include "material.h"
-#include "intersection.h"
-#include "ray.h"
+#include "global/common.h"
+#include "global/triangle.h"
+#include "global/material.h"
+#include "global/intersection.h"
+#include "global/ray.h"
+#include "objects/scene_object.h"
 #include <vector>
 #include <limits>
 
-class Mesh {
+class Mesh : public SceneObject {
 public:
     std::vector<Triangle> triangles;
     mutable Material material;
@@ -19,7 +20,7 @@ public:
         triangles.push_back(tri);
     }
 
-    bool intersect(const Ray& ray, HitRecord& hit) const {
+    bool intersect(const Ray& ray, HitRecord& hit) const override {
         bool hit_anything = false;
         float closest = std::numeric_limits<float>::infinity();
 

@@ -14,8 +14,16 @@ make
 ## Run
 
 ```bash
-./mcdenoise -c config/default.yaml -m assets/quad.obj -o output.png
+./mcdenoise -c config/test.yaml --asset-root assets --scene scenes/test_scene.yaml -o output.png
 ```
+
+Arguments:
+- `-c, --config`: Image + camera + sampling settings.
+- `--asset-root`: Root folder for OBJ files referenced by scene meshes.
+- `--scene`: Scene YAML under `scenes/` describing objects.
+- `-o, --output`: Output PNG path.
+- `--seed`: Optional sampler RNG seed (defaults to random).
+
 
 ## Dependencies
 
@@ -31,4 +39,3 @@ make
 - [A Statistical Approach to Monte Carlo Denoising](https://users.cg.tuwien.ac.at/~hiroyuki/StatMC/) - Sakai et al., SIGGRAPH Asia 2024
 - [Statistical Error Reduction for Monte Carlo Rendering](https://users.cg.tuwien.ac.at/~hiroyuki/StatER/) - Sakai et al., SIGGRAPH Asia 2025
 - [P-RPF: Pixel-Based Random Parameter Filtering for Monte Carlo Rendering](https://ieeexplore.ieee.org/document/6814987/) - Park et al., CAD/Graphics 2013
-
