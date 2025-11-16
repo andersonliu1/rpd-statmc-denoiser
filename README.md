@@ -6,14 +6,16 @@ Monte Carlo path tracing with denoising for CSCI 580.
 
 ```bash
 git submodule update --init --recursive
-mkdir build && cd build
-cmake ..
-make
+./run.sh
 ```
 
 ## Run
 
 ```bash
+./run.sh
+./run.sh -- --preset <preset-name>   # optional cmake configure args
+./run.sh clean                       # removes build/ after cleaning
+
 ./path_tracer -c config/test.yaml --scene cornell_box -o output.png
 ```
 

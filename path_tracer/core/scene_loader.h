@@ -5,7 +5,7 @@
 
 #include "scene.h"
 
-#include "scenes/registry.h"
+#include "scenes/scene_registry.h"
 
 namespace scenes {
 

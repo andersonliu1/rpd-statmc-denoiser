@@ -1,14 +1,28 @@
 #pragma once
 
+#include <array>
+
 #include "scenes/scene_utils.h"
 
 namespace scenes {
 
 inline Scene make_debug_scene() {
     Scene scene;
-    const int floor_id = scene.add_material(Material(Vec3f(0.8f, 0.8f, 0.8f)));
-    const int left_id = scene.add_material(Material(Vec3f(0.2f, 0.6f, 0.9f)));
-    const int right_id = scene.add_material(Material(Vec3f(0.9f, 0.3f, 0.3f)));
+
+    const std::array<Material, 3> material_defs = {
+        Material{Lambertian{Vec3f(0.8f, 0.8f, 0.8f)}},
+        Material{Lambertian{Vec3f(0.2f, 0.6f, 0.9f)}},
+        Material{Lambertian{Vec3f(0.9f, 0.3f, 0.3f)}}
+    };
+
+    std::array<int, material_defs.size()> material_ids{};
+    for (size_t i = 0; i < material_defs.size(); ++i) {
+        material_ids[i] = scene.add_material(material_defs[i]);
+    }
+
+    const int floor_id = material_ids[0];
+    const int left_id = material_ids[1];
+    const int right_id = material_ids[2];
 
     scene.add_triangle(make_triangle(
         Vec3f(-1.0f, -1.0f, -1.0f),

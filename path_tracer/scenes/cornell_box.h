@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+
 #include "scenes/scene_utils.h"
 
 namespace scenes {
@@ -7,12 +9,26 @@ namespace scenes {
 inline Scene make_cornell_box() {
     Scene scene;
 
-    const int back_id = scene.add_material(Material(Vec3f(0.774f, 0.274f, 0.445f)));
-    const int bottom_id = scene.add_material(Material(Vec3f(0.874f, 0.874f, 0.875f)));
-    const int left_id = scene.add_material(Material(Vec3f(0.0f, 0.2117f, 0.3765f)));
-    const int right_id = scene.add_material(Material(Vec3f(0.996f, 0.7373f, 0.0667f)));
-    const int top_id = scene.add_material(Material(Vec3f(0.894f, 0.894f, 0.895f)));
-    const int light_id = scene.add_material(Material(Vec3f(1.0f, 1.0f, 1.0f)));
+    const std::array<Material, 6> material_defs = {
+        Material{Lambertian{Vec3f(0.774f, 0.274f, 0.445f)}},
+        Material{Lambertian{Vec3f(0.874f, 0.874f, 0.875f)}},
+        Material{Lambertian{Vec3f(0.0f, 0.2117f, 0.3765f)}},
+        Material{Lambertian{Vec3f(0.996f, 0.7373f, 0.0667f)}},
+        Material{Lambertian{Vec3f(0.894f, 0.894f, 0.895f)}},
+        Material{Lambertian{Vec3f(1.0f, 1.0f, 1.0f)}}
+    };
+
+    std::array<int, material_defs.size()> material_ids{};
+    for (size_t i = 0; i < material_defs.size(); ++i) {
+        material_ids[i] = scene.add_material(material_defs[i]);
+    }
+
+    const int back_id = material_ids[0];
+    const int bottom_id = material_ids[1];
+    const int left_id = material_ids[2];
+    const int right_id = material_ids[3];
+    const int top_id = material_ids[4];
+    const int light_id = material_ids[5];
 
     constexpr float light_x = 0.195f;
     constexpr float light_y = -0.355f;

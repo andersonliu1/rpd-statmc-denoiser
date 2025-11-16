@@ -8,5 +8,9 @@
         "${workspaceFolder}/extern/spdlog/include",
         "${workspaceFolder}/extern/yaml-cpp/include",
         "${workspaceFolder}/extern/eigen"
-    ]
+    ],
+    "files.associations": {
+        "array": "cpp",
+        "*.inc": "cpp"
+    }
 }

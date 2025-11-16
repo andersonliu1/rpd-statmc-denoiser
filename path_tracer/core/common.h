@@ -1,7 +1,9 @@
 #pragma once
 #include <Eigen/Dense>
 
-#define EPS 0.001f
+#define EPS 1e-4f
+#define EPS_SMALL 1e-8f
+#define M_1_2PI 0.159154943091895335769 // 1/2 pi
 
 template<int N, typename T> using Vec = Eigen::Matrix<T, N, 1>;
 

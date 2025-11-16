@@ -1,6 +1,6 @@
 #pragma once
 
-#include "global/scene.h"
+#include "core/scene.h"
 
 namespace scenes {
 

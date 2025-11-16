@@ -15,6 +15,7 @@ add_subdirectory(extern/eigen)
 
 add_executable(path_tracer
     main.cpp
+    path_tracer/core/image.cpp
 )
 
 target_include_directories(path_tracer PRIVATE
