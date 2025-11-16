@@ -11,12 +11,32 @@ git submodule update --init --recursive
 
 ## Run
 
-```bash
-./run.sh
-./run.sh -- --preset <preset-name>   # optional cmake configure args
-./run.sh clean                       # removes build/ after cleaning
+### Building
 
-./path_tracer -c config/test.yaml --scene cornell_box -o output.png
+```bash
+# Build the renderer (default target) into build/path_tracer_build
+./run.sh
+
+# Pass options to CMake's configure step after '--'
+./run.sh -- --preset <preset-name>
+
+# Build with more parallel jobs or other cmake --build flags
+./run.sh --parallel
+
+# Clean only the renderer's build directory
+./run.sh clean --target path_tracer
+```
+
+When another target (e.g., a denoiser) lands in the tree, use `./run.sh --target <name>`
+to build or clean it without touching the others.
+
+### Running the path tracer
+
+```bash
+./build/path_tracer_build/path_tracer \
+    -c path_tracer/config/test.yaml \
+    --scene cornell_box \
+    -o output.png
 ```
 
 Arguments:

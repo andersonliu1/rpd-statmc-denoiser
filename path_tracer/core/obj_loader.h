@@ -6,7 +6,7 @@
 #include "../../extern/tinyobjloader/tiny_obj_loader.h"
 #include "common.h"
 #include "triangle.h"
-#include <iostream>
+#include <spdlog/spdlog.h>
 
 inline Vec3f calc_normal(const Vec3f& v0, const Vec3f& v1, const Vec3f& v2){
     return ((v1 - v0).cross(v2 - v0)).normalized();
@@ -19,11 +19,15 @@ inline std::vector<Triangle> load_obj(std::string inputfile, int material_id = 0
     std::vector<Triangle> res;
 
     if (!reader.ParseFromFile(inputfile, reader_config)){
-        if (!reader.Error().empty()) std::cout << "TinyObjReader: " << reader.Warning() << std::endl;
+        if (!reader.Error().empty()) {
+            spdlog::error("TinyObjReader error while reading '{}': {}", inputfile, reader.Error());
+        }
         exit(1);
     }
 
-    if (!reader.Warning().empty()) std::cout << "TinyObjReader: " << reader.Warning() << std::endl;
+    if (!reader.Warning().empty()) {
+        spdlog::warn("TinyObjReader warning for '{}': {}", inputfile, reader.Warning());
+    }
 
     auto& attrib = reader.GetAttrib();
     auto& shapes = reader.GetShapes();
