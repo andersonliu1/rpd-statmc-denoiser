@@ -35,8 +35,8 @@ struct Image {
         const float E = 0.14f;
 
         Vec3f color = 0.6f * value;
-        color = (color.cwiseProduct(A * color + Vec3f::Ones() * B))
-              .cwiseQuotient(color.cwiseProduct(C * color + Vec3f::Ones() * D) + Vec3f::Ones() * E);
+        color = (color.cwiseProduct(A * color + Vec3f::Ones() * B)).cwiseQuotient(color.cwiseProduct(C * color + Vec3f::Ones() * D) + Vec3f::Ones() * E);
+
         return color.cwiseMax(0.0f).cwiseMin(1.0f);
     }
 
@@ -59,12 +59,14 @@ struct Image {
         auto agx_contrast = [](const Vec3f& x) {
             Vec3f x2 = x.cwiseProduct(x);
             Vec3f x4 = x2.cwiseProduct(x2);
-            Vec3f term6 = x4.cwiseProduct(x2);
-            Vec3f term5 = x4.cwiseProduct(x);
-            Vec3f term3 = x2.cwiseProduct(x);
-            return 15.5f * term6 - 40.14f * term5 + 31.96f * x4
-                 -6.868f * term3 + 0.4298f * x2 + 0.1191f * x
-                 -Vec3f::Constant(0.00232f);
+            Vec3f x6 = x4.cwiseProduct(x2);
+            Vec3f x2x = x2.cwiseProduct(x);
+            Vec3f x4x = x4.cwiseProduct(x);
+            Vec3f x6x = x6.cwiseProduct(x);
+            return -17.86f * x6x + 78.01f * x6
+                - 126.7f * x4x + 92.06f * x4
+                - 28.72f * x2x + 4.361f * x2
+                - 0.1718 * x + Vec3f::Constant(0.002857f);
         };
 
         auto agx_look = [](const Vec3f& input) {
@@ -83,8 +85,7 @@ struct Image {
                 saturation = 1.4f;
             }
 
-            Vec3f val = (input.cwiseProduct(slope) + offset)
-                .array().pow(power.array()).matrix();
+            Vec3f val = (input.cwiseProduct(slope) + offset).array().pow(power.array()).matrix();
             const Vec3f lw(0.2126f, 0.7152f, 0.0722f);
             float luma = val.dot(lw);
             return Vec3f::Constant(luma) + saturation * (val - Vec3f::Constant(luma));
@@ -105,7 +106,6 @@ struct Image {
         c = agx_contrast(c);
         c = agx_look(c);
         c = outset * c;
-        c = c.array().pow(2.2f).matrix();
         return c.cwiseMax(0.0f).cwiseMin(1.0f);
     }
 
