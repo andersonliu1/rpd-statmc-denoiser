@@ -3,6 +3,7 @@
 #include <string>
 #include <cstdint>
 #include <algorithm>
+#include <cmath>
 
 #include "common.h"
 

@@ -3,6 +3,10 @@
 #define TINYOBJLOADER_IMPLEMENTATION
 #define TINYOBJLOADER_USE_MAPBOX_EARCUT
 
+#include <cstdlib>
+#include <string>
+#include <vector>
+
 #include "../../extern/tinyobjloader/tiny_obj_loader.h"
 #include "common.h"
 #include "triangle.h"

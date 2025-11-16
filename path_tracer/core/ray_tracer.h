@@ -1,10 +1,15 @@
 #pragma once
 #include "common.h"
 #include "triangle.h"
+#include "ray.h"
 #include <cstdint>
+#include <limits>
 #include <numeric>
 #include <algorithm>
 #include <tuple>
+#include <utility>
+#include <vector>
+#include <cmath>
 
 struct BoundingBox {
     Vec3f min_point, max_point;
@@ -38,10 +43,10 @@ struct BoundingBox {
         );
     }
 
-    std::tuple<bool, float, float> ray_intersect(const Vec3f& ray_origin, const Vec3f& ray_direction) const {
-        const Vec3f inv_dir = ray_direction.cwiseInverse();
-        const Vec3f low = (min_point - ray_origin) * inv_dir;
-        const Vec3f high = (max_point - ray_origin) * inv_dir;
+    std::tuple<bool, float, float> ray_intersect(const Ray& ray) const {
+        const Vec3f inv_dir = ray.direction.cwiseInverse();
+        const Vec3f low = (min_point - ray.origin) * inv_dir;
+        const Vec3f high = (max_point - ray.origin) * inv_dir;
         
         const Vec3f t_min = low.cwiseMin(high), t_max = low.cwiseMax(high);
 
@@ -50,18 +55,6 @@ struct BoundingBox {
         return { t_near <= t_far, t_near, t_far };
     }
 };
-
-// struct OctreeNode {
-//     BoundingBox bounds;
-//     std::vector<uint32_t> triangle_indices;
-//     std::array<std::unique_ptr<OctreeNode>, 8> children;
-//     bool is_leaf;
-
-
-//     OctreeNode(const BoundingBox& bounds, const std::vector<uint32_t>& triangle_indices, const bool is_leaf = false) : bounds(bounds), triangle_indices(triangle_indices), is_leaf(is_leaf) {
-//         for (size_t i = 0; i < 8; ++i) children[i] = nullptr;
-//     }
-// };
 
 struct BVHNode {
     BoundingBox bounds;
@@ -82,6 +75,88 @@ struct BVH {
     std::vector<uint32_t> triangle_indices;
     std::vector<Vec3f> triangle_centroids;
     int root = -1;
+
+    /// @brief Traverses the BVH starting from root
+    /// @param triangles Array of triangles
+    /// @param root Starting node
+    /// @param ray Ray to trace
+    /// @param tMax Max dist along the ray
+    /// @param shadow_ray If shadow_ray then we only care about whether it hits or not
+    /// @return 
+    std::tuple<bool, float, uint32_t> traverse_bvh(const std::vector<Triangle>& triangles, int root, const Ray& ray, const float tMax, const bool shadow_ray) const {
+        uint32_t closest_tri = UINT32_MAX;
+
+        if (root < 0 || nodes.empty()) {
+            return { false, tMax, closest_tri };
+        }
+
+        bool hit_anything = false;
+        float effectiveMax = shadow_ray ? tMax - EPS_ANYHIT : tMax;
+        if (effectiveMax <= 0.0f) return { false, tMax, closest_tri };
+
+        float closest_t = effectiveMax;
+
+        std::vector<std::pair<int, float>> stack;
+        stack.reserve(MAX_DEPTH);
+
+        auto [root_hit, root_t_near, root_t_far] = nodes[root].bounds.ray_intersect(ray);
+        if (!root_hit || root_t_near > effectiveMax || root_t_far < 0.0f) {
+            return { false, tMax, closest_tri };
+        }
+        stack.emplace_back(root, root_t_near);
+
+        while (!stack.empty()) {
+            auto [node_index, t_near] = stack.back();
+            stack.pop_back();
+
+            if (t_near > closest_t) continue;
+
+            const BVHNode& node = nodes[node_index];
+
+            if (node.is_leaf()) {
+                for (uint32_t i = 0; i < node.index_count; ++i) {
+                    uint32_t tri_idx = triangle_indices[node.first_index + i];
+                    const Triangle& tri = triangles[tri_idx];
+                    auto [hit, t] = Triangle::ray_triangle_intersect(tri, ray, 0.0f, closest_t);
+                    if (hit && t < closest_t) {
+                        closest_t = t;
+                        closest_tri = tri_idx;
+                        hit_anything = true;
+                        if (shadow_ray) return { true, closest_t, closest_tri };
+                    }
+                }
+            } else {
+                std::pair<int, float> child_entries[2];
+                int child_count = 0;
+
+                auto consider_child = [&](int child_idx) {
+                    if (child_idx < 0) return;
+                    const BVHNode& child = nodes[child_idx];
+                    auto [child_hit, child_near, child_far] = child.bounds.ray_intersect(ray);
+                    if (!child_hit || child_near > closest_t || child_far < 0.0f) return;
+                    child_entries[child_count] = { child_idx, child_near };
+                    ++child_count;
+                };
+
+                consider_child(node.left);
+                consider_child(node.right);
+
+                if (child_count == 1) {
+                    stack.push_back(child_entries[0]);
+                } else if (child_count == 2) {
+                    if (child_entries[0].second < child_entries[1].second) {
+                        stack.push_back(child_entries[1]);
+                        stack.push_back(child_entries[0]);
+                    } else {
+                        stack.push_back(child_entries[0]);
+                        stack.push_back(child_entries[1]);
+                    }
+                }
+            }
+        }
+
+        return { hit_anything, closest_t, closest_tri };
+    }
 
     BVH() = default;
     BVH(const std::vector<Triangle>& triangles){
@@ -171,3 +246,22 @@ struct BVH {
         return node_index;
     }
 };
+
+/// @brief Finds the closest triangle hit for the given ray and BVH
+/// @param ray Ray to trace. Make sure the origin is offset if needed
+/// @param bvh BVH built over `triangles`
+/// @param triangles Array of triangles
+/// @return
+static std::tuple<bool, float, uint32_t> closest_hit(const Ray& ray, const BVH& bvh, const std::vector<Triangle>& triangles) {
+    return bvh.traverse_bvh(triangles, bvh.root, ray, std::numeric_limits<float>::infinity(), false);
+}
+
+/// @brief Tests whether the ray hits any triangle in the BVH
+/// @param ray Ray to trace. Make sure the origin is offset if needed
+/// @param bvh BVH built over `triangles`
+/// @param triangles Array of triangles
+/// @return True if any intersection occurs before tMax, false otherwise
+static bool any_hit(const Ray& ray, const float tMax, const BVH& bvh, const std::vector<Triangle>& triangles) {
+    auto [hit, t, tri] = bvh.traverse_bvh(triangles, bvh.root, ray, tMax, true);
+    return hit;
+}

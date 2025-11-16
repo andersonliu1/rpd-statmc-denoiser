@@ -23,7 +23,7 @@ struct Scene {
         float closest = hit.t;
 
         for (const auto& tri : triangles) {
-            auto [did_hit, t] = Triangle::ray_triangle_intersect(tri, ray.origin, ray.direction, EPS, closest);
+            auto [did_hit, t] = Triangle::ray_triangle_intersect(tri, ray, EPS, closest);
             if (did_hit && t < closest) {
                 closest = t;
                 hit.t = t;

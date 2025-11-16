@@ -1,5 +1,6 @@
 #pragma once
 #include "common.h"
+#include "ray.h"
 #include <tuple>
 
 struct Triangle {
@@ -18,13 +19,12 @@ struct Triangle {
 
     /// @brief WaterTight Ray/Triangle Intersection: http://jcgt.org/published/0002/01/05/paper.pdf
     /// @param tri 
-    /// @param ray_origin 
-    /// @param ray_direction 
+    /// @param ray 
     /// @param t_min 
     /// @param t_max 
     /// @return  
-    static std::tuple<bool, float> ray_triangle_intersect(const Triangle& tri, const Vec3f& ray_origin, const Vec3f& ray_direction, float t_min, float t_max){
-        const Vec3f abs_direction = ray_direction.cwiseAbs();
+    static std::tuple<bool, float> ray_triangle_intersect(const Triangle& tri, const Ray& ray, float t_min, float t_max){
+        const Vec3f abs_direction = ray.direction.cwiseAbs();
         unsigned int axis = 0;
 
         if (abs_direction[1] > abs_direction[0] &&
@@ -37,19 +37,19 @@ struct Triangle {
         unsigned int kz = axis;
         unsigned int kx = (kz + 1) % 3;
         unsigned int ky = (kx + 1) % 3;
-        if (ray_direction[kz] < 0.0f) {
+        if (ray.direction[kz] < 0.0f) {
             unsigned int swap = kx;
             kx = ky;
             ky = swap;
         }
 
-        float Sx = ray_direction[kx] / ray_direction[kz];
-        float Sy = ray_direction[ky] / ray_direction[kz];
-        float Sz = 1.f / ray_direction[kz];
+        float Sx = ray.direction[kx] / ray.direction[kz];
+        float Sy = ray.direction[ky] / ray.direction[kz];
+        float Sz = 1.f / ray.direction[kz];
 
-        const Vec3f A = tri.v[0] - ray_origin;
-        const Vec3f B = tri.v[1] - ray_origin;
-        const Vec3f C = tri.v[2] - ray_origin;
+        const Vec3f A = tri.v[0] - ray.origin;
+        const Vec3f B = tri.v[1] - ray.origin;
+        const Vec3f C = tri.v[2] - ray.origin;
 
         const float Ax = A[kx] - Sx * A[kz];
         const float Ay = A[ky] - Sy * A[kz];
