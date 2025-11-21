@@ -20,7 +20,7 @@ struct Image {
 
     enum class ToneMapping : uint8_t { AGXDefault, AGXGolden, AGXPunchy, ACES };
 
-    static constexpr ToneMapping ToneMappingPreset = ToneMapping::AGXDefault; // Define Tonemapping Here
+    static constexpr ToneMapping ToneMappingPreset = ToneMapping::ACES; // Define Tonemapping Here
 
     Image() = default;
     Image(int w, int h) : width(w), height(h), pixels(w * h, Vec3f::Zero()) {}
@@ -38,7 +38,7 @@ struct Image {
         Vec3f color = 0.6f * value;
         color = (color.cwiseProduct(A * color + Vec3f::Ones() * B)).cwiseQuotient(color.cwiseProduct(C * color + Vec3f::Ones() * D) + Vec3f::Ones() * E);
 
-        return color.cwiseMax(0.0f).cwiseMin(1.0f);
+        return clamp(color, 0.0f, 1.0f);
     }
 
     /// @brief AGX Tone Mapping: https://iolite-engine.com/blog_posts/minimal_agx_implementation
@@ -46,15 +46,15 @@ struct Image {
     /// @return 
     Vec3f tone_map_Agx(const Vec3f& value) const {
         static const Mat3f inset = (Mat3f() <<
-            0.842479062253094f, 0.0423282422610123f, 0.0423756549057051f,
-            0.0784336f, 0.878468636469772f, 0.0784336f,
-            0.0792237451477643f, 0.0791661274605434f, 0.879142973793104f
+            0.842479062253094f, 0.0784336f, 0.0792237451477643f,
+            0.0423282422610123f, 0.878468636469772f, 0.0791661274605434f,
+            0.0423756549057051f, 0.0784336f, 0.879142973793104f
         ).finished();
 
         static const Mat3f outset = (Mat3f() <<
-            1.19687900512017f, -0.0528968517574562f, -0.0529716355144438f,
-            -0.0980208811401368f, 1.15190312990417f, -0.0980434501171241f,
-            -0.0990297440797205f, -0.0989611768448433f, 1.15107367264116f
+            1.19687900512017f, -0.0980208811401368f, -0.0990297440797205f,
+            -0.0528968517574562f, 1.15190312990417f, -0.0989611768448433f,
+            -0.0529716355144438f, -0.0980434501171241f, 1.15107367264116f
         ).finished();
 
         auto agx_contrast = [](const Vec3f& x) {
@@ -107,7 +107,7 @@ struct Image {
         c = agx_contrast(c);
         c = agx_look(c);
         c = outset * c;
-        return c.cwiseMax(0.0f).cwiseMin(1.0f);
+        return clamp(c, 0.0f, 1.0f);
     }
 
     bool save(const std::string &filename) const {

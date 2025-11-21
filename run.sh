@@ -8,9 +8,38 @@ CLEAN=false
 CONFIG_ARGS=()
 BUILD_ARGS=()
 
+safe_remove_dir() {
+    local dir="$1"
+    if [[ -z "$dir" || "$dir" == "/" || "$dir" == "." ]]; then
+        echo "Refusing to remove unsafe directory '$dir'." >&2
+        exit 1
+    fi
+    rm -rf "$dir"
+}
+
+perform_clean() {
+    if [[ ! -d "$BUILD_DIR" ]]; then
+        echo "Build directory '$BUILD_DIR' does not exist, nothing to clean."
+        exit 0
+    fi
+
+    if [[ -f "$BUILD_DIR/CMakeCache.txt" ]]; then
+        if ! cmake --build "$BUILD_DIR" --target clean; then
+            echo "Warning: cmake clean failed, removing build directory anyway." >&2
+        fi
+    fi
+
+    echo "Removing build directory '$BUILD_DIR'."
+    safe_remove_dir "$BUILD_DIR"
+    exit 0
+}
+
 usage() {
     cat <<EOF
 Usage: $(basename "$0") [clean] [options] [-- <cmake configure args>]
+
+Commands:
+  clean                 Remove the configured build directory.
 
 Options:
   -t, --target <name>     Build only the specified CMake target (default: path_tracer)
@@ -64,12 +93,7 @@ if [[ -z "$BUILD_DIR" ]]; then
 fi
 
 if [[ "$CLEAN" == true ]]; then
-    if [[ ! -d "$BUILD_DIR" ]]; then
-        echo "Build directory '$BUILD_DIR' does not exist, nothing to clean." >&2
-        exit 0
-    fi
-    cmake --build "$BUILD_DIR" --target clean
-    exit 0
+    perform_clean
 fi
 
 if [[ ${#CONFIG_ARGS[@]} -gt 0 ]]; then

@@ -17,6 +17,14 @@ struct Triangle {
     inline Vec3f& v1() { return v[1]; }
     inline Vec3f& v2() { return v[2]; }
 
+    inline float area() const {
+        return 0.5f * (v1() - v0()).cross(v2() - v0()).norm();
+    }
+
+    inline bool is_emitter() const {
+        return !emission.isZero(EPS_SMALL);
+    }
+
     /// @brief WaterTight Ray/Triangle Intersection: http://jcgt.org/published/0002/01/05/paper.pdf
     /// @param tri 
     /// @param ray 

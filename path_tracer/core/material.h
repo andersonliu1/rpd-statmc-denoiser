@@ -13,6 +13,10 @@ struct Lambertian {
         return albedo / M_PI;
      }
 
+    Vec3f eval(Vec3f, Vec3f, Vec3f) const {
+        return eval();
+    }
+
     /// @brief Sample BRDF for the Lambertian
     /// @param normal The surface normal
     /// @param u A random number (0,1)^2
@@ -24,6 +28,10 @@ struct Lambertian {
         Vec3f out(r * cos(phi), r * sin(phi), u.x());
         
         return {local_to_world(out, normal), M_1_2PI};
+    }
+
+    std::tuple<Vec3f, float> sample(Vec3f, Vec3f normal, Vec2f u) const {
+        return sample(normal, u);
     }
 
     /// @brief Computes the PDF for the Lambertian
@@ -180,6 +188,14 @@ struct Material {
     Material(const BRDF& v) : brdf(v) {}
 };
 
-inline Vec3f material_albedo(const Material& material) {
-    return std::visit([](const auto& brdf) { return brdf.albedo; }, material.brdf);
+inline Vec3f brdf_eval(const Material& material, Vec3f wo_world, Vec3f wi_world, Vec3f normal) {
+    return std::visit([&](const auto& brdf) { return brdf.eval(wo_world, wi_world, normal); }, material.brdf);
+}
+
+inline float brdf_pdf(const Material& material, Vec3f wo_world, Vec3f wi_world, Vec3f normal) {
+    return std::visit([&](const auto& brdf) { return brdf.pdf(wo_world, wi_world, normal); }, material.brdf);
+}
+
+inline std::tuple<Vec3f, float> brdf_sample(const Material& material, Vec3f wo_world, Vec3f normal, Vec2f u) {
+    return std::visit([&](const auto& brdf) { return brdf.sample(wo_world, normal, u); }, material.brdf);
 }

@@ -8,6 +8,7 @@ namespace scenes {
 
 inline Scene make_debug_scene() {
     Scene scene;
+    scene.environment_color = Vec3f::Zero();
 
     const std::array<Material, 3> material_defs = {
         Material{Lambertian{Vec3f(0.8f, 0.8f, 0.8f)}},

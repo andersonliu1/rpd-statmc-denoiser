@@ -4,11 +4,7 @@
 
 namespace scenes {
 
-inline Triangle make_triangle(const Vec3f& v0,
-                              const Vec3f& v1,
-                              const Vec3f& v2,
-                              int material_id,
-                              const Vec3f& emission = Vec3f::Zero()) {
+inline Triangle make_triangle(const Vec3f& v0, const Vec3f& v1, const Vec3f& v2, int material_id, const Vec3f& emission = Vec3f::Zero()) {
     Triangle tri;
     tri.v0() = v0;
     tri.v1() = v1;
@@ -24,6 +20,12 @@ inline Triangle make_triangle(const Vec3f& v0,
     }
 
     return tri;
+}
+
+inline Light make_rect_light(const Vec3f& pos, const Vec3f& width, const Vec3f& height, const Vec3f& emission) {
+    RectLight light(pos, width, height, emission);
+
+    return light;
 }
 
 } // namespace scenes

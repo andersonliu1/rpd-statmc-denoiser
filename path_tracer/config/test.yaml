@@ -3,11 +3,12 @@ image_width: 320
 image_height: 240
 
 # Camera settings
-fov: 60.0
-camera_position: [0.0, 0.15, 0.5]
-camera_lookat: [0.0, 0.1, 0.0]
+fov: 45.0
+camera_position: [0.278, 0.275, -0.9]
+camera_direction: [0.0, -0.05, 1.0]
+focus_distance: 1.18
 
 # Rendering settings
-samples_per_pixel: 4
-max_depth: 4
-gamma: 2.2
+samples_per_pixel: 128
+scene: cornell_box
+output: output/cornell.png

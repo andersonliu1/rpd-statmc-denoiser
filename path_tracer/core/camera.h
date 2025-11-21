@@ -22,27 +22,21 @@ struct Camera {
 
     /// Initializes the camera basis and thin-lens parameters.
     /// @param eye_position Camera origin in world space.
-    /// @param target Point in world space the camera looks toward.
-    /// @param world_up_hint Hint for the upward direction (should not be parallel to the view direction).
-    /// @param vfovVertical field of view in degrees.
-    /// @param camera_aspect_ratio Image aspect ratio (width / height).
+    /// @param forward Direction in world space the camera looks toward.
+    /// @param world_up Hint for the upward direction (should not be parallel to the view direction).
+    /// @param fov Vertical field of view in degrees.
+    /// @param camera_aspect Image aspect ratio (width / height).
     /// @param focus_dist Distance from the eye to the focal plane.
     /// @param aperture Diameter of the lens opening (0 for pinhole).
-    void init(const Vec3f& eye_pos,
-              const Vec3f& target,
-              const Vec3f& world_up_hint,
-              float vfov,
-              float camera_aspect_ratio,
-              float focus_dist = 1.0f,
-              float aperture = 0.0f) {
+    void init(const Vec3f& eye_pos, const Vec3f& forward, const float fov, const float camera_aspect, const float focus_dist = 1.0f, const float aperture = 0.0f, const Vec3f& world_up = Vec3f(0.0f, 1.0f, 0.0f)) {
         position = eye_pos;
-        vertical_fov = vfov;
-        aspect_ratio = camera_aspect_ratio;
+        vertical_fov = fov;
+        aspect_ratio = camera_aspect;
         focus_distance = focus_dist;
         lens_radius = 0.5f * aperture;
 
-        forward_vector = (target - position).normalized();
-        right_vector = forward_vector.cross(world_up_hint).normalized();
+        forward_vector = forward.normalized();
+        right_vector = forward_vector.cross(world_up).normalized();
         up_vector = right_vector.cross(forward_vector).normalized();
 
         update_film_geometry();

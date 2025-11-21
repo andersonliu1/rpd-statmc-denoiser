@@ -45,8 +45,8 @@ struct BoundingBox {
 
     std::tuple<bool, float, float> ray_intersect(const Ray& ray) const {
         const Vec3f inv_dir = ray.direction.cwiseInverse();
-        const Vec3f low = (min_point - ray.origin) * inv_dir;
-        const Vec3f high = (max_point - ray.origin) * inv_dir;
+        const Vec3f low = (min_point - ray.origin).cwiseProduct(inv_dir);
+        const Vec3f high = (max_point - ray.origin).cwiseProduct(inv_dir);
         
         const Vec3f t_min = low.cwiseMin(high), t_max = low.cwiseMax(high);
 

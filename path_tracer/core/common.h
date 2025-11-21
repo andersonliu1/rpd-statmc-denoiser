@@ -53,3 +53,27 @@ inline Vec3f world_to_local(const Vec3f& v, const Vec3f& n){
     auto [x, y] = coordinate_system(n);
     return Vec3f(v.dot(x), v.dot(y), v.dot(n));
 }
+
+inline Vec3f offset_ray_origin(const Vec3f& ray_pos, const Vec3f& normal) {
+    return ray_pos + EPS * normal;
+}
+
+template <int N, typename T>
+inline Vec<N, T> clamp(const Vec<N, T>& v, const Vec<N, T>& min_val, const Vec<N, T>& max_val) {
+    return v.cwiseMin(max_val).cwiseMax(min_val);
+}
+
+template <int N, typename T>
+inline Vec<N, T> clamp(const Vec<N, T>& v, const T min_val, const T max_val) {
+    return v.cwiseMin(max_val).cwiseMax(min_val);
+}
+
+// https://en.wikipedia.org/wiki/Relative_luminance
+inline float calc_luminance(const Vec3f& c) {
+    return 0.2126f * c.x() + 0.7152f * c.y() + 0.0722f * c.z();
+}
+
+template<class T>
+inline T lerp(T a, T b, float t){
+    return a + (b - a) * t;
+}

@@ -8,6 +8,7 @@ namespace scenes {
 
 inline Scene make_cornell_box() {
     Scene scene;
+    scene.environment_color = Vec3f::Zero();
 
     const std::array<Material, 6> material_defs = {
         Material{Lambertian{Vec3f(0.774f, 0.274f, 0.445f)}},
@@ -30,86 +31,61 @@ inline Scene make_cornell_box() {
     const int top_id = material_ids[4];
     const int light_id = material_ids[5];
 
-    constexpr float light_x = 0.195f;
-    constexpr float light_y = -0.355f;
-    constexpr float light_z = 0.545f;
-    constexpr float light_len_x = 0.16f;
-    constexpr float light_len_y = 0.16f;
+    constexpr float room_width = 0.556f;
+    constexpr float room_height = 0.5488f;
+    constexpr float room_depth = 0.5592f;
+
+    const Vec3f p000(0.0f, 0.0f, 0.0f);
+    const Vec3f p100(room_width, 0.0f, 0.0f);
+    const Vec3f p010(0.0f, room_height, 0.0f);
+    const Vec3f p110(room_width, room_height, 0.0f);
+    const Vec3f p001(0.0f, 0.0f, room_depth);
+    const Vec3f p101(room_width, 0.0f, room_depth);
+    const Vec3f p011(0.0f, room_height, room_depth);
+    const Vec3f p111(room_width, room_height, room_depth);
+
+    constexpr float light_width = 0.2f;
+    constexpr float light_depth = 0.16f;
     const Vec3f light_emission(70.0f, 70.0f, 70.0f);
+    const Vec3f light_origin(
+        0.5f * (room_width - light_width),
+        room_height - 1e-3f,
+        0.5f * (room_depth - light_depth)
+    );
+    const Vec3f light_u(light_width, 0.0f, 0.0f);
+    const Vec3f light_v(0.0f, 0.0f, light_depth);
 
-    // Light
-    scene.add_triangle(make_triangle(
-        Vec3f(light_x, light_y + light_len_y, light_z),
-        Vec3f(light_x + light_len_x, light_y, light_z),
-        Vec3f(light_x, light_y, light_z),
-        light_id,
-        light_emission));
-    scene.add_triangle(make_triangle(
-        Vec3f(light_x, light_y + light_len_y, light_z),
-        Vec3f(light_x + light_len_x, light_y + light_len_y, light_z),
-        Vec3f(light_x + light_len_x, light_y, light_z),
-        light_id,
-        light_emission));
+    int light_idx = scene.add_light(make_rect_light(light_origin, light_u, light_v, light_emission));
 
-    // Back wall
-    scene.add_triangle(make_triangle(
-        Vec3f(0.0f, -0.5592f, 0.5488f),
-        Vec3f(0.5560f, -0.5592f, 0.0f),
-        Vec3f(0.0f, -0.5592f, 0.0f),
-        back_id));
-    scene.add_triangle(make_triangle(
-        Vec3f(0.0f, -0.5592f, 0.5488f),
-        Vec3f(0.5560f, -0.5592f, 0.5488f),
-        Vec3f(0.5560f, -0.5592f, 0.0f),
-        back_id));
+    const Vec3f l0 = light_origin;
+    const Vec3f l1 = light_origin + light_u;
+    const Vec3f l2 = light_origin + light_u + light_v;
+    const Vec3f l3 = light_origin + light_v;
 
-    // Floor
-    scene.add_triangle(make_triangle(
-        Vec3f(0.0f, -0.5592f, 0.0f),
-        Vec3f(0.5560f, -0.5592f, 0.0f),
-        Vec3f(0.5560f, 0.0f, 0.0f),
-        bottom_id));
-    scene.add_triangle(make_triangle(
-        Vec3f(0.0f, -0.5592f, 0.0f),
-        Vec3f(0.5560f, 0.0f, 0.0f),
-        Vec3f(0.0f, 0.0f, 0.0f),
-        bottom_id));
+    int light_tri_1 = scene.add_triangle(make_triangle(l0, l1, l2, light_id, light_emission));
+    int light_tri_2 = scene.add_triangle(make_triangle(l0, l2, l3, light_id, light_emission));
+    scene.link_triangle_to_light(light_tri_1, light_idx);
+    scene.link_triangle_to_light(light_tri_2, light_idx);
 
-    // Left wall
-    scene.add_triangle(make_triangle(
-        Vec3f(0.5560f, 0.0f, 0.5488f),
-        Vec3f(0.5560f, 0.0f, 0.0f),
-        Vec3f(0.5560f, -0.5592f, 0.0f),
-        left_id));
-    scene.add_triangle(make_triangle(
-        Vec3f(0.5560f, 0.0f, 0.5488f),
-        Vec3f(0.5560f, -0.5592f, 0.0f),
-        Vec3f(0.5560f, -0.5592f, 0.5488f),
-        left_id));
+    // Back wall (z = room_depth)
+    scene.add_triangle(make_triangle(p001, p111, p101, back_id));
+    scene.add_triangle(make_triangle(p001, p011, p111, back_id));
 
-    // Right wall
-    scene.add_triangle(make_triangle(
-        Vec3f(0.0f, -0.5592f, 0.0f),
-        Vec3f(0.0f, 0.0f, 0.0f),
-        Vec3f(0.0f, 0.0f, 0.5488f),
-        right_id));
-    scene.add_triangle(make_triangle(
-        Vec3f(0.0f, -0.5592f, 0.0f),
-        Vec3f(0.0f, 0.0f, 0.5488f),
-        Vec3f(0.0f, -0.5592f, 0.5488f),
-        right_id));
+    // Floor (y = 0)
+    scene.add_triangle(make_triangle(p000, p101, p100, bottom_id));
+    scene.add_triangle(make_triangle(p000, p001, p101, bottom_id));
 
-    // Ceiling
-    scene.add_triangle(make_triangle(
-        Vec3f(0.0f, 0.0f, 0.5488f),
-        Vec3f(0.5560f, -0.5592f, 0.5488f),
-        Vec3f(0.0f, -0.5592f, 0.5488f),
-        top_id));
-    scene.add_triangle(make_triangle(
-        Vec3f(0.0f, 0.0f, 0.5488f),
-        Vec3f(0.5560f, 0.0f, 0.5488f),
-        Vec3f(0.5560f, -0.5592f, 0.5488f),
-        top_id));
+    // Left wall (x = 0)
+    scene.add_triangle(make_triangle(p000, p011, p001, left_id));
+    scene.add_triangle(make_triangle(p000, p010, p011, left_id));
+
+    // Right wall (x = room_width)
+    scene.add_triangle(make_triangle(p100, p101, p111, right_id));
+    scene.add_triangle(make_triangle(p100, p111, p110, right_id));
+
+    // Ceiling (y = room_height)
+    scene.add_triangle(make_triangle(p010, p110, p111, top_id));
+    scene.add_triangle(make_triangle(p010, p111, p011, top_id));
 
     return scene;
 }
