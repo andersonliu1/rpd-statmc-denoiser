@@ -36,7 +36,19 @@ struct Camera {
         lens_radius = 0.5f * aperture;
 
         forward_vector = forward.normalized();
-        right_vector = forward_vector.cross(world_up).normalized();
+        Vec3f up_hint = world_up.normalized();
+        Vec3f right = forward_vector.cross(up_hint);
+
+        if (right.squaredNorm() < EPS_SMALL) {
+            Vec3f alt_up = (std::fabs(forward_vector.z()) < 0.999f) ? Vec3f::UnitZ() : Vec3f::UnitY();
+            if (alt_up.isApprox(up_hint, EPS_SMALL)) {
+                alt_up = Vec3f::UnitX();
+            }
+            up_hint = alt_up;
+            right = forward_vector.cross(up_hint);
+        }
+
+        right_vector = right.normalized();
         up_vector = right_vector.cross(forward_vector).normalized();
 
         update_film_geometry();

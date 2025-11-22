@@ -30,6 +30,8 @@ struct RenderConfig {
     float aperture;
     Vec3f camera_position;
     Vec3f camera_direction;
+    Vec3f camera_up;
+    std::optional<std::string> camera_coordinate_mapping;
     std::optional<std::string> scene_name;
     std::optional<std::string> output_path;
 };
@@ -46,16 +48,22 @@ RenderConfig parse_render_config(const YAML::Node& config) {
 
     auto cam_pos = config["camera_position"].as<std::vector<float>>();
     auto cam_direction = config["camera_direction"].as<std::vector<float>>();
+    std::vector<float> cam_up_vec = config["world_up"] ? config["world_up"].as<std::vector<float>>() : std::vector<float>{0.0f, 1.0f, 0.0f};
     if (cam_pos.size() != 3 || cam_direction.size() != 3) {
         throw std::runtime_error("Camera vectors must have three components");
+    }
+    if (cam_up_vec.size() != 3) {
+        throw std::runtime_error("world_up must have three components");
     }
 
     render_config.camera_position = Vec3f(cam_pos[0], cam_pos[1], cam_pos[2]);
     render_config.camera_direction = Vec3f(cam_direction[0], cam_direction[1], cam_direction[2]);
+    render_config.camera_up = Vec3f(cam_up_vec[0], cam_up_vec[1], cam_up_vec[2]);
     render_config.focus_distance = config["focus_distance"] ? config["focus_distance"].as<float>() : render_config.camera_direction.norm();
     render_config.aperture = config["aperture"] ? config["aperture"].as<float>() : 0.0f;
     if (config["scene"]) render_config.scene_name = config["scene"].as<std::string>();
     if (config["output"]) render_config.output_path = config["output"].as<std::string>();
+    if (config["camera_coordinate_mapping"]) render_config.camera_coordinate_mapping = config["camera_coordinate_mapping"].as<std::string>();
 
     return render_config;
 }
@@ -175,6 +183,7 @@ Image render_image(const RenderConfig& config, const Scene& scene, const Camera&
                 Ray ray = camera.generate_ray(u, (1.0f - v));
                 Vec3f path_trace = mis_path_trace(ray);
                 image(x,y) += clamp(path_trace, Vec3f(0.0f, 0.0f, 0.0f), Vec3f(50.0f, 50.0f, 50.0f));
+                // image(x,y) += path_trace;
             }
 
             image(x,y) /= (float)config.samples_per_pixel;
@@ -225,6 +234,25 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    auto apply_camera_mapping = [&](RenderConfig& cfg) {
+        if (!cfg.camera_coordinate_mapping) return;
+        const std::string& mapping = *cfg.camera_coordinate_mapping;
+        auto map_vec = [&](const Vec3f& v) -> Vec3f {
+            if (mapping == "box_original") {
+                return Vec3f(v.x(), v.z(), -v.y());
+            }
+            return v;
+        };
+
+        Vec3f mapped_dir = map_vec(cfg.camera_direction).normalized();
+        Vec3f mapped_up = map_vec(cfg.camera_up).normalized();
+        cfg.camera_position = map_vec(cfg.camera_position);
+        cfg.camera_direction = mapped_dir;
+        cfg.camera_up = mapped_up;
+    };
+
+    apply_camera_mapping(render_config);
+
     std::string output_path = !output_file.empty() ? output_file : render_config.output_path.value_or("");
     if (output_path.empty()) {
         spdlog::error("No output specified. Provide --output or set 'output' in the config.");
@@ -252,7 +280,13 @@ int main(int argc, char** argv) {
     spdlog::info("Loaded scene with {} triangles, {} materials, {} lights", scene.triangle_count(), scene.material_count(), scene.lights.size());
 
     Camera camera;
-    camera.init(render_config.camera_position, render_config.camera_direction, render_config.fov, float(render_config.image_width) / render_config.image_height, render_config.focus_distance, render_config.aperture);
+    camera.init(render_config.camera_position,
+                render_config.camera_direction,
+                render_config.fov,
+                float(render_config.image_width) / render_config.image_height,
+                render_config.focus_distance,
+                render_config.aperture,
+                render_config.camera_up);
 
     uint32_t seed = sampler_seed.value_or(std::random_device{}());
     if (sampler_seed) {

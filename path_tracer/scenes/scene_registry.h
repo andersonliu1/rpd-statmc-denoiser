@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "scenes/box.h"
 #include "scenes/cornell_box.h"
 #include "scenes/debug_scene.h"
 
@@ -12,11 +13,14 @@ namespace scenes {
         if (name == "cornell_box") {
             return make_cornell_box();
         }
+        if (name == "box") {
+            return make_box();
+        }
         if (name == "debug") {
             return make_debug_scene();
         }
 
-        throw std::runtime_error("Unknown scene '" + name + "'. Available scenes: cornell_box, debug");
+        throw std::runtime_error("Unknown scene '" + name + "'. Available scenes: cornell_box, box, debug");
     }
 
 } // namespace scenes
