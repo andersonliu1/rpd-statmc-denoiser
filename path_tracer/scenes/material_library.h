@@ -12,4 +12,8 @@ namespace scenes {
             .distribution = Microfacet::Distribution::GGX
         };
 
+    inline const Mirror MirrorWhite {
+            .albedo = Vec3f(0.95f, 0.95f, 0.95f)
+        };
+
 } // namespace scenes

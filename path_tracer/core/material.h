@@ -91,7 +91,7 @@ struct Microfacet {
         auto smith = [&](const Vec3f& v) {
             float cos_theta = std::clamp(v.z(), EPS, 1.0f);
             float sin_theta2 = std::max(0.0f, 1.0f - cos_theta * cos_theta);
-            if (sin_theta2 <= 0.0f) return 1.0f;
+            if (sin_theta2 <= EPS_SMALL) return 1.0f;
 
             float tan_theta = std::sqrt(sin_theta2) / cos_theta;
             float alpha = std::max(roughness, EPS);
@@ -113,7 +113,7 @@ struct Microfacet {
         Vec3f wo = world_to_local(wo_world, normal).normalized();
         Vec3f wi = world_to_local(wi_world, normal).normalized();
 
-        if (wo.z() <= 0.0f || wi.z() <= 0.0f) return Vec3f::Zero();
+        if (wo.z() <= EPS_SMALL || wi.z() <= EPS_SMALL) return Vec3f::Zero();
 
         Vec3f h = (wo + wi).normalized();
         if (!std::isfinite(h.x()) || !std::isfinite(h.y()) || !std::isfinite(h.z())) return Vec3f::Zero();
@@ -129,7 +129,7 @@ struct Microfacet {
         Vec3f wo = world_to_local(wo_world, normal);
         Vec3f wi = world_to_local(wi_world, normal);
 
-        if (wo.z() <= 0.0f || wi.z() <= 0.0f) return 0.0f;
+        if (wo.z() <= EPS_SMALL || wi.z() <= EPS_SMALL) return 0.0f;
 
         Vec3f h = (wo + wi).normalized();
         if (!std::isfinite(h.x()) || !std::isfinite(h.y()) || !std::isfinite(h.z())) return 0.0f;
@@ -137,14 +137,14 @@ struct Microfacet {
         float ndoth = std::max(0.0f, h.z());
         float wodoth = std::max(0.0f, wo.dot(h));
 
-        if (ndoth <= 0.0f || wodoth <= 0.0f) return 0.0f;
+        if (ndoth <= EPS_SMALL || wodoth <= EPS_SMALL) return 0.0f;
 
         return D(h) * ndoth / (4.0f * wodoth);
     }
 
     std::tuple<Vec3f, float> sample(Vec3f wo_world, Vec3f normal, Vec2f u) const {
         Vec3f wo = world_to_local(wo_world, normal).normalized();
-        if (wo.z() <= 0.0f) return {Vec3f::Zero(), 0.0f};
+        if (wo.z() <= EPS_SMALL) return {Vec3f::Zero(), 0.0f};
 
         float u1 = std::clamp(u.x(), EPS_SMALL, 1.0f - EPS_SMALL);
         float u2 = std::clamp(u.y(), EPS_SMALL, 1.0f - EPS_SMALL);
@@ -167,10 +167,10 @@ struct Microfacet {
             wh = Vec3f(sin_theta * cos_phi, sin_theta * sin_phi, cos_theta).normalized();
         }
 
-        if (wh.z() <= 0.0f) wh.z() = EPS;
+        if (wh.z() <= EPS_SMALL) wh.z() = EPS;
 
         Vec3f wi_local = (wo - 2.0f * wo.dot(wh) * wh).normalized();
-        if (wi_local.z() <= 0.0f) return {Vec3f::Zero(), 0.0f};
+        if (wi_local.z() <= EPS_SMALL) return {Vec3f::Zero(), 0.0f};
 
         Vec3f wi_world = local_to_world(wi_local, normal);
         float pdf_val = pdf(wo_world, wi_world, normal);
@@ -178,8 +178,49 @@ struct Microfacet {
     }
 };
 
+struct Mirror {
+    Vec3f albedo = Vec3f::Ones();
+
+    static Vec3f reflect(const Vec3f& dir, const Vec3f& normal) {
+        return dir - 2.0f * dir.dot(normal) * normal;
+    }
+
+    Vec3f eval(Vec3f wo_world, Vec3f wi_world, Vec3f normal) const {
+        Vec3f n = normal.normalized();
+        if (wo_world.dot(n) <= EPS_SMALL || wi_world.dot(n) <= EPS_SMALL) return Vec3f::Zero();
+
+        Vec3f expected = reflect(-wo_world.normalized(), n).normalized();
+        Vec3f incoming = wi_world.normalized();
+        if ((expected - incoming).squaredNorm() <= EPS_SMALL) {
+            return albedo;
+        }
+        return Vec3f::Zero();
+    }
+
+    float pdf(Vec3f wo_world, Vec3f wi_world, Vec3f normal) const {
+        Vec3f n = normal.normalized();
+        if (wo_world.dot(n) <= EPS_SMALL || wi_world.dot(n) <= EPS_SMALL) return 0.0f;
+
+        Vec3f expected = reflect(-wo_world.normalized(), n).normalized();
+        Vec3f incoming = wi_world.normalized();
+        return (expected - incoming).squaredNorm() <= EPS_SMALL ? 1.0f : 0.0f;
+    }
+
+    std::tuple<Vec3f, float> sample(Vec3f wo_world, Vec3f normal, Vec2f) const {
+        Vec3f n = normal.normalized();
+        Vec3f wo = wo_world.normalized();
+        if (wo.dot(n) <= EPS_SMALL) return {Vec3f::Zero(), 0.0f};
+
+        Vec3f wi = reflect(-wo, n).normalized();
+        if (!std::isfinite(wi.x()) || !std::isfinite(wi.y()) || !std::isfinite(wi.z())) {
+            return {Vec3f::Zero(), 0.0f};
+        }
+        return {wi, 1.0f};
+    }
+};
+
 struct Material {
-    using Variant = std::variant<Lambertian, Microfacet>;
+    using Variant = std::variant<Lambertian, Microfacet, Mirror>;
 
     Variant brdf;
 

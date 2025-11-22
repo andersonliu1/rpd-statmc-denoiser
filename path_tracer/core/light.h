@@ -39,7 +39,7 @@ struct RectLight {
         point_to_sample.normalize();
 
         float cos_light = normal.dot(-point_to_sample);
-        if (cos_light <= 0.0f) return sample;
+        if (cos_light <= EPS_SMALL) return sample;
 
         sample.wi_world = point_to_sample;
         sample.light_dist = sqrt(sqr_dist);
@@ -52,7 +52,7 @@ struct RectLight {
 
     float pdf(const Vec3f& p, const Vec3f& dir, float dist) const {
         float cos_light = normal.dot(-dir);
-        if (cos_light <= 0.0f) return 0.0f;
+        if (cos_light <= EPS_SMALL) return 0.0f;
         return (dist * dist) / (cos_light * area);
     }
 };
@@ -87,7 +87,7 @@ struct AreaLight {
         point_to_sample.normalize();
 
         float cos_light = triangle.normal.dot(-point_to_sample);
-        if (cos_light <= 0.0f) return sample;
+        if (cos_light <= EPS_SMALL) return sample;
 
         sample.wi_world = point_to_sample;
         sample.light_dist = sqrt(sqr_dist);
@@ -100,7 +100,7 @@ struct AreaLight {
 
     float pdf(const Vec3f& p, const Vec3f& dir, float dist) const {
         float cos_light = triangle.normal.dot(-dir);
-        if (cos_light <= 0.0f) return 0.0f;
+        if (cos_light <= EPS_SMALL) return 0.0f;
         return (dist * dist) / (cos_light * area);
     }
 };

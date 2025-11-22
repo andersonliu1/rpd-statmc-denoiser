@@ -92,7 +92,7 @@ struct BVH {
 
         bool hit_anything = false;
         float effectiveMax = shadow_ray ? tMax - EPS_ANYHIT : tMax;
-        if (effectiveMax <= 0.0f) return { false, tMax, closest_tri };
+        if (effectiveMax <= EPS_SMALL) return { false, tMax, closest_tri };
 
         float closest_t = effectiveMax;
 
@@ -100,7 +100,7 @@ struct BVH {
         stack.reserve(MAX_DEPTH);
 
         auto [root_hit, root_t_near, root_t_far] = nodes[root].bounds.ray_intersect(ray);
-        if (!root_hit || root_t_near > effectiveMax || root_t_far < 0.0f) {
+        if (!root_hit || root_t_near > effectiveMax || root_t_far < EPS_SMALL) {
             return { false, tMax, closest_tri };
         }
         stack.emplace_back(root, root_t_near);
@@ -133,7 +133,7 @@ struct BVH {
                     if (child_idx < 0) return;
                     const BVHNode& child = nodes[child_idx];
                     auto [child_hit, child_near, child_far] = child.bounds.ray_intersect(ray);
-                    if (!child_hit || child_near > closest_t || child_far < 0.0f) return;
+                    if (!child_hit || child_near > closest_t || child_far < EPS_SMALL) return;
                     child_entries[child_count] = { child_idx, child_near };
                     ++child_count;
                 };

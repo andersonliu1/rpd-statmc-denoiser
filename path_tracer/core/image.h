@@ -26,7 +26,7 @@ struct Image {
     Image(int w, int h) : width(w), height(h), pixels(w * h, Vec3f::Zero()) {}
 
     /// @brief Compute log-average luminance for exposure scaling.
-    float log_average_luminance(float delta = 1e-4f) const {
+    float log_average_luminance(float delta = EPS) const {
         if (pixels.empty()) return 0.0f;
         double log_sum = 0.0;
         for (const Vec3f& px : pixels) {
@@ -64,7 +64,7 @@ struct Image {
         const Vec3f inset_r0(0.842479062253094f, 0.0423282422610123f, 0.0423756549057051f);
         const Vec3f inset_r1(0.0784336f, 0.878468636469772f, 0.0791661274605434f);
         const Vec3f inset_r2(0.0792237451477643f, 0.0791661274605434f, 0.879142973793104f);
-        Vec3f col = mul_rows(inset_r0, inset_r1, inset_r2, value).cwiseMax(Vec3f::Constant(1e-6f));
+        Vec3f col = mul_rows(inset_r0, inset_r1, inset_r2, value).cwiseMax(Vec3f::Constant(EPS_SMALL));
 
         constexpr float minEv = -12.47393f;
         constexpr float maxEv = 4.026069f;
