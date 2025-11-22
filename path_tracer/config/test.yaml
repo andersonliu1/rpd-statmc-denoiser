@@ -1,11 +1,11 @@
 # Image settings
-image_width: 320
-image_height: 240
+image_width: 256
+image_height: 256
 
 # Camera settings
 fov: 45.0
-camera_position: [0.278, 0.275, -0.9]
-camera_direction: [0.0, -0.05, 1.0]
+camera_position: [0.278, 0.275, -0.65]
+camera_direction: [0.0, 0.0, 1.0]
 focus_distance: 1.18
 
 # Rendering settings
