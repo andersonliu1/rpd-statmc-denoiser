@@ -15,7 +15,7 @@ git submodule update --init --recursive
 
 ```bash
 # Build the renderer (default target) into build/path_tracer_build
-./run.sh
+./run.sh -- --preset Release
 
 # Pass options to CMake's configure step after '--'
 ./run.sh -- --preset <preset-name>
@@ -33,17 +33,26 @@ to build or clean it without touching the others.
 ### Running the path tracer
 
 ```bash
+# From the repo root after building
 ./build/path_tracer_build/path_tracer \
     -c path_tracer/config/test.yaml \
     --scene cornell_box \
-    -o output.png
+    -o output.png \
+    --seed 1234
+
+# or use the helper script to build (optional) and run:
+./trace.sh -- -c path_tracer/config/test.yaml -o output/cornell.png
+
+# Skip the build step if you already built:
+./trace.sh --no-build -- -c path_tracer/config/test.yaml -s cornell_box
 ```
 
 Arguments:
-- `-c, --config`: Image + camera + sampling settings.
-- `--scene`: Built-in scene to render (e.g., `cornell_box`, `debug`).
-- `-o, --output`: Output PNG path.
+- `-c, --config`: Image + camera + sampling settings (YAML). May include `scene` and `output`.
+- `--scene`: Built-in scene to render (overrides YAML `scene` when supplied).
+- `-o, --output`: Output PNG path. Overrides YAML `output` when supplied.
 - `--seed`: Optional sampler RNG seed (defaults to random).
+- Additional CLI arguments follow the same precedence rules: CLI overrides YAML, YAML is the fallback.
 
 
 ## Dependencies
