@@ -3,7 +3,7 @@
 #include <stdexcept>
 #include <string>
 
-#include "scenes/box.h"
+#include "scenes/bunny.h"
 #include "scenes/cornell_box.h"
 #include "scenes/debug_scene.h"
 
@@ -13,8 +13,8 @@ namespace scenes {
         if (name == "cornell_box") {
             return make_cornell_box();
         }
-        if (name == "box") {
-            return make_box();
+        if (name == "bunny") {
+            return make_bunny();
         }
         if (name == "debug") {
             return make_debug_scene();

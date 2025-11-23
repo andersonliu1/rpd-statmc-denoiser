@@ -11,7 +11,7 @@
 
 namespace scenes {
 
-inline Scene make_box() {
+inline Scene make_bunny() {
     Scene scene;
     scene.environment_color = Vec3f::Zero();
 
