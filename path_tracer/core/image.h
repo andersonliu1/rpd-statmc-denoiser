@@ -20,7 +20,7 @@ struct Image {
 
     enum class ToneMapping : uint8_t { AGXDefault, AGXGolden, AGXPunchy, ACES };
 
-    static constexpr ToneMapping ToneMappingPreset = ToneMapping::AGXDefault; // Define Tonemapping Here
+    static constexpr ToneMapping ToneMappingPreset = ToneMapping::ACES; // Define Tonemapping Here
 
     Image() = default;
     Image(int w, int h) : width(w), height(h), pixels(w * h, Vec3f::Zero()) {}

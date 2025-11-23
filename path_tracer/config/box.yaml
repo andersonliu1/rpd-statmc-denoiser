@@ -10,6 +10,6 @@ world_up: [0.0, 1.0, 0.0]
 focus_distance: 0.8
 
 # Rendering settings
-samples_per_pixel: 128
+samples_per_pixel: 8
 scene: box
-output: output/cornell.png
+output: output/bunny.png

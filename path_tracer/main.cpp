@@ -7,6 +7,11 @@
 #include <optional>
 #include <type_traits>
 #include <filesystem>
+#include <atomic>
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 #include "CLI/CLI.hpp"
 #include "spdlog/spdlog.h"
@@ -31,7 +36,6 @@ struct RenderConfig {
     Vec3f camera_position;
     Vec3f camera_direction;
     Vec3f camera_up;
-    std::optional<std::string> camera_coordinate_mapping;
     std::optional<std::string> scene_name;
     std::optional<std::string> output_path;
 };
@@ -63,7 +67,6 @@ RenderConfig parse_render_config(const YAML::Node& config) {
     render_config.aperture = config["aperture"] ? config["aperture"].as<float>() : 0.0f;
     if (config["scene"]) render_config.scene_name = config["scene"].as<std::string>();
     if (config["output"]) render_config.output_path = config["output"].as<std::string>();
-    if (config["camera_coordinate_mapping"]) render_config.camera_coordinate_mapping = config["camera_coordinate_mapping"].as<std::string>();
 
     return render_config;
 }
@@ -167,12 +170,41 @@ Image render_image(const RenderConfig& config, const Scene& scene, const Camera&
     Image image(config.image_width, config.image_height);
 
     spdlog::info("Rendering...");
+#ifdef _OPENMP
+    spdlog::info("OpenMP threads: {}", omp_get_max_threads());
+#endif
     auto start = std::chrono::high_resolution_clock::now();
 
-    for (int y = 0; y < config.image_height; ++y) {
-        if (y % 50 == 0) {
-            spdlog::info("Rendering row {} / {}", y, config.image_height);
+    std::atomic<int> rows_completed{0};
+
+#ifdef _OPENMP
+#pragma omp parallel
+    {
+#pragma omp for schedule(dynamic, 1)
+        for (int y = 0; y < config.image_height; ++y) {
+            for (int x = 0; x < config.image_width; ++x) {
+                image(x, y) = Vec3f::Zero();
+
+                for (int s = 0; s < config.samples_per_pixel; ++s) {
+                    const float u = (x + Sampler::next1d()) / (config.image_width);
+                    const float v = (y + Sampler::next1d()) / (config.image_height);
+
+                    Ray ray = camera.generate_ray(u, (1.0f - v));
+                    Vec3f path_trace = mis_path_trace(ray);
+                    image(x,y) += clamp(path_trace, Vec3f(0.0f, 0.0f, 0.0f), Vec3f(50.0f, 50.0f, 50.0f));
+                }
+
+                image(x,y) /= (float)config.samples_per_pixel;
+            }
+
+            int finished = ++rows_completed;
+            if (finished % 50 == 0 || finished == config.image_height) {
+                spdlog::info("Rendering progress: {} / {}", finished, config.image_height);
+            }
         }
+    }
+#else
+    for (int y = 0; y < config.image_height; ++y) {
         for (int x = 0; x < config.image_width; ++x) {
             image(x, y) = Vec3f::Zero();
 
@@ -183,12 +215,17 @@ Image render_image(const RenderConfig& config, const Scene& scene, const Camera&
                 Ray ray = camera.generate_ray(u, (1.0f - v));
                 Vec3f path_trace = mis_path_trace(ray);
                 image(x,y) += clamp(path_trace, Vec3f(0.0f, 0.0f, 0.0f), Vec3f(50.0f, 50.0f, 50.0f));
-                // image(x,y) += path_trace;
             }
 
             image(x,y) /= (float)config.samples_per_pixel;
         }
+
+        int finished = ++rows_completed;
+        if (finished % 50 == 0 || finished == config.image_height) {
+            spdlog::info("Rendering progress: {} / {}", finished, config.image_height);
+        }
     }
+#endif
 
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
@@ -233,25 +270,6 @@ int main(int argc, char** argv) {
         spdlog::error("No scene specified. Provide --scene or set 'scene' in the config.");
         return 1;
     }
-
-    auto apply_camera_mapping = [&](RenderConfig& cfg) {
-        if (!cfg.camera_coordinate_mapping) return;
-        const std::string& mapping = *cfg.camera_coordinate_mapping;
-        auto map_vec = [&](const Vec3f& v) -> Vec3f {
-            if (mapping == "box_original") {
-                return Vec3f(v.x(), v.z(), -v.y());
-            }
-            return v;
-        };
-
-        Vec3f mapped_dir = map_vec(cfg.camera_direction).normalized();
-        Vec3f mapped_up = map_vec(cfg.camera_up).normalized();
-        cfg.camera_position = map_vec(cfg.camera_position);
-        cfg.camera_direction = mapped_dir;
-        cfg.camera_up = mapped_up;
-    };
-
-    apply_camera_mapping(render_config);
 
     std::string output_path = !output_file.empty() ? output_file : render_config.output_path.value_or("");
     if (output_path.empty()) {

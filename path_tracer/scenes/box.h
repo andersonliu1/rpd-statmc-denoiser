@@ -1,8 +1,13 @@
 #pragma once
 
 #include <array>
+#include <cmath>
+#include <filesystem>
+#include <limits>
 
 #include "scenes/scene_utils.h"
+#include "core/obj_loader.h"
+#include "scenes/material_library.h"
 
 namespace scenes {
 
@@ -30,13 +35,14 @@ inline Scene make_box() {
     const int right_id = material_ids[3];
     const int top_id = material_ids[4];
     const int light_mat_id = material_ids[5];
+    const int bunny_mat_id = scene.add_material(Material{Gold});
 
     const float light_x = 0.195f;
     const float light_y_sn = -0.355f;
     const float light_z_sn = 0.545f;
     const float light_len_x = 0.16f;
     const float light_len_y = 0.16f;
-    const Vec3f light_color(50.0f, 50.0f, 50.0f);
+    const Vec3f light_color(80.0f, 80.0f, 80.0f);
 
     auto to_scene = [](const Vec3f& v) {
         return Vec3f(v.x(), v.z(), -v.y());
@@ -99,6 +105,49 @@ inline Scene make_box() {
     scene.add_triangle(make_triangle(to_scene(Vec3f(0.000000133f, -0.000000119f, 0.548799932f)),
                                      to_scene(Vec3f(0.555999935f, -0.000000119f, 0.548799932f)),
                                      to_scene(Vec3f(0.555999935f, -0.559199989f, 0.548799932f)), top_id));
+
+    const std::filesystem::path bunny_path = std::filesystem::path("resources/models/bunny.obj");
+    std::vector<Triangle> bunny_mesh = load_obj(bunny_path.string(), bunny_mat_id);
+
+    Vec3f min_bounds = Vec3f::Constant(std::numeric_limits<float>::max());
+    Vec3f max_bounds = Vec3f::Constant(std::numeric_limits<float>::lowest());
+    for (const Triangle& tri : bunny_mesh) {
+        for (int i = 0; i < 3; ++i) {
+            min_bounds = min_bounds.cwiseMin(tri.v[i]);
+            max_bounds = max_bounds.cwiseMax(tri.v[i]);
+        }
+    }
+
+    const float target_height = 0.32f;
+    float height = std::max(EPS_SMALL, max_bounds.y() - min_bounds.y());
+    float scale = target_height / height;
+    const float center_x = 0.5f * (min_bounds.x() + max_bounds.x());
+    const float center_z = 0.5f * (min_bounds.z() + max_bounds.z());
+    const float min_y = min_bounds.y();
+    const Vec3f placement(0.28f, 1e-3f, 0.25f);
+
+    auto rotate_y = [](const Vec3f& v, float angle) {
+        float c = std::cos(angle);
+        float s = std::sin(angle);
+        return Vec3f(c * v.x() + s * v.z(), v.y(), -s * v.x() + c * v.z());
+    };
+
+    const float face_angle = static_cast<float>(M_PI); // rotate to face camera
+
+    for (Triangle& tri : bunny_mesh) {
+        for (int i = 0; i < 3; ++i) {
+            Vec3f v = tri.v[i];
+            v.x() = (v.x() - center_x);
+            v.y() = (v.y() - min_y);
+            v.z() = (v.z() - center_z);
+            v *= scale;
+            v = rotate_y(v, face_angle);
+            v += placement;
+            tri.v[i] = v;
+        }
+        tri.normal = (tri.v1() - tri.v0()).cross(tri.v2() - tri.v0()).normalized();
+        scene.add_triangle(tri);
+    }
 
     return scene;
 }

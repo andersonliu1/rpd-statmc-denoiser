@@ -22,12 +22,16 @@ struct Lambertian {
     /// @param u A random number (0,1)^2
     /// @return A tuple containing the sampled direction in world space and the PDF
     std::tuple<Vec3f, float> sample(Vec3f normal, Vec2f u) const {
-        float phi = u.y() * 2 * M_PI;
-        float r = sqrt(1 - u.x() * u.x());
-        
-        Vec3f out(r * cos(phi), r * sin(phi), u.x());
-        
-        return {local_to_world(out, normal), M_1_2PI};
+        float r = std::sqrt(u.x());
+        float theta = 2.0f * M_PI * u.y();
+        float x = r * std::cos(theta);
+        float y = r * std::sin(theta);
+        float z = std::sqrt(std::max(0.0f, 1.0f - u.x()));
+
+        Vec3f out(x, y, z);
+        Vec3f wi = local_to_world(out, normal);
+        float pdf = z / M_PI;
+        return {wi, pdf};
     }
 
     std::tuple<Vec3f, float> sample(Vec3f, Vec3f normal, Vec2f u) const {
@@ -39,8 +43,9 @@ struct Lambertian {
     /// @param wi_world The light incident direction
     /// @param normal The surface normal (unused for Lambertian)
     /// @return The PDF value
-    float pdf(Vec3f wo_world, Vec3f wi_world, Vec3f normal) const {
-        return M_1_2PI;
+    float pdf(Vec3f, Vec3f wi_world, Vec3f normal) const {
+        float cos_theta = std::max(0.0f, wi_world.dot(normal));
+        return cos_theta / M_PI;
     }
 
 };
@@ -169,7 +174,7 @@ struct Microfacet {
 
         if (wh.z() <= EPS_SMALL) wh.z() = EPS;
 
-        Vec3f wi_local = (wo - 2.0f * wo.dot(wh) * wh).normalized();
+        Vec3f wi_local = (-wo + 2.0f * wo.dot(wh) * wh).normalized();
         if (wi_local.z() <= EPS_SMALL) return {Vec3f::Zero(), 0.0f};
 
         Vec3f wi_world = local_to_world(wi_local, normal);

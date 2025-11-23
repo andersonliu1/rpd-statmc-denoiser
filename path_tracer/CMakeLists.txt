@@ -1,3 +1,5 @@
+find_package(OpenMP QUIET)
+
 add_executable(path_tracer
     main.cpp
 )
@@ -14,6 +16,10 @@ target_link_libraries(path_tracer PRIVATE
     yaml-cpp::yaml-cpp
     Eigen3::Eigen
 )
+
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(path_tracer PRIVATE OpenMP::OpenMP_CXX)
+endif()
 
 add_custom_command(TARGET path_tracer POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
