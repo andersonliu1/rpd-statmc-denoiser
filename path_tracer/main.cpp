@@ -7,10 +7,14 @@
 #include <optional>
 #include <type_traits>
 #include <filesystem>
+#include <thread>
 
 #include "CLI/CLI.hpp"
 #include "spdlog/spdlog.h"
 #include "yaml-cpp/yaml.h"
+#include "tbb/parallel_for.h"
+#include "tbb/blocked_range2d.h"
+#include "tbb/global_control.h"
 
 #include "core/common.h"
 #include "core/camera.h"
@@ -25,6 +29,7 @@ struct RenderConfig {
     int image_width;
     int image_height;
     int samples_per_pixel;
+    int num_threads;
     float fov;
     float focus_distance;
     float aperture;
@@ -45,6 +50,10 @@ RenderConfig parse_render_config(const YAML::Node& config) {
     render_config.image_height = config["image_height"].as<int>();
     render_config.samples_per_pixel = config["samples_per_pixel"].as<int>();
     render_config.fov = config["fov"].as<float>();
+
+    const int max_threads = std::thread::hardware_concurrency();
+    int requested_threads = config["num_threads"] ? config["num_threads"].as<int>() : max_threads;
+    render_config.num_threads = std::clamp(requested_threads, 1, max_threads);
 
     auto cam_pos = config["camera_position"].as<std::vector<float>>();
     auto cam_direction = config["camera_direction"].as<std::vector<float>>();
@@ -163,32 +172,36 @@ Vec3f mis_path_trace(Ray ray) {
     return shade_mis(nearest_tri, hit_pos, -ray.direction.normalized());
 }
 
-Image render_image(const RenderConfig& config, const Scene& scene, const Camera& camera) {
+Image render_image(const RenderConfig& config, const Scene& scene, const Camera& camera, uint32_t seed) {
     Image image(config.image_width, config.image_height);
 
     spdlog::info("Rendering...");
     auto start = std::chrono::high_resolution_clock::now();
 
-    for (int y = 0; y < config.image_height; ++y) {
-        if (y % 50 == 0) {
-            spdlog::info("Rendering row {} / {}", y, config.image_height);
-        }
-        for (int x = 0; x < config.image_width; ++x) {
-            image(x, y) = Vec3f::Zero();
+    tbb::parallel_for(
+        tbb::blocked_range2d<int>(0, config.image_height, 0, config.image_width),
+        [&](const tbb::blocked_range2d<int>& r) {
+            Sampler::init(seed);
 
-            for (int s = 0; s < config.samples_per_pixel; ++s) {
-                const float u = (x + Sampler::next1d()) / (config.image_width);
-                const float v = (y + Sampler::next1d()) / (config.image_height);
+            for (int y = r.rows().begin(); y != r.rows().end(); ++y) {
+                for (int x = r.cols().begin(); x != r.cols().end(); ++x) {
+                    image(x, y) = Vec3f::Zero();
 
-                Ray ray = camera.generate_ray(u, (1.0f - v));
-                Vec3f path_trace = mis_path_trace(ray);
-                image(x,y) += clamp(path_trace, Vec3f(0.0f, 0.0f, 0.0f), Vec3f(50.0f, 50.0f, 50.0f));
-                // image(x,y) += path_trace;
+                    for (int s = 0; s < config.samples_per_pixel; ++s) {
+                        const float u = (x + Sampler::next1d()) / (config.image_width);
+                        const float v = (y + Sampler::next1d()) / (config.image_height);
+
+                        Ray ray = camera.generate_ray(u, (1.0f - v));
+                        Vec3f path_trace = mis_path_trace(ray);
+                        image(x,y) += clamp(path_trace, Vec3f(0.0f, 0.0f, 0.0f), Vec3f(50.0f, 50.0f, 50.0f));
+                        // image(x,y) += path_trace;
+                    }
+
+                    image(x,y) /= (float)config.samples_per_pixel;
+                }
             }
-
-            image(x,y) /= (float)config.samples_per_pixel;
         }
-    }
+    );
 
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
@@ -264,6 +277,7 @@ int main(int argc, char** argv) {
 
     spdlog::info("Image: {}x{}", render_config.image_width, render_config.image_height);
     spdlog::info("Samples per pixel: {}", render_config.samples_per_pixel);
+    spdlog::info("Num threads: {}", render_config.num_threads);
     spdlog::info("Camera position: [{}, {}, {}]", render_config.camera_position.x(), render_config.camera_position.y(), render_config.camera_position.z());
     spdlog::info("Scene: {}", scene_to_render);
     spdlog::info("Output path: {}", output_path);
@@ -294,9 +308,10 @@ int main(int argc, char** argv) {
     } else {
         spdlog::info("Using random sampler seed {}", seed);
     }
-    Sampler::init(seed);
 
-    Image image = render_image(render_config, scene, camera);
+    tbb::global_control global_limit(tbb::global_control::max_allowed_parallelism, render_config.num_threads);
+
+    Image image = render_image(render_config, scene, camera, seed);
 
     const std::filesystem::path output_fs_path(output_path);
     const std::filesystem::path parent_dir = output_fs_path.parent_path();

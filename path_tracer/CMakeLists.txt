@@ -13,6 +13,7 @@ target_link_libraries(path_tracer PRIVATE
     spdlog::spdlog
     yaml-cpp::yaml-cpp
     Eigen3::Eigen
+    TBB::tbb
 )
 
 add_custom_command(TARGET path_tracer POST_BUILD

@@ -13,4 +13,8 @@ add_subdirectory(extern/yaml-cpp)
 
 add_subdirectory(extern/eigen)
 
+set(TBB_TEST OFF CACHE BOOL "" FORCE)
+set(TBB_EXAMPLES OFF CACHE BOOL "" FORCE)
+add_subdirectory(extern/oneTBB)
+
 add_subdirectory(path_tracer)

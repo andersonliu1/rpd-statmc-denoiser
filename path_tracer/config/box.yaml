@@ -11,5 +11,6 @@ focus_distance: 0.8
 
 # Rendering settings
 samples_per_pixel: 128
+num_threads: 8
 scene: box
 output: output/cornell.png

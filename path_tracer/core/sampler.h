@@ -2,13 +2,16 @@
 #include "common.h"
 #include <cmath>
 #include <random>
+#include <thread>
 
 struct Sampler {
     inline thread_local static std::mt19937 rng;
     inline thread_local static std::uniform_real_distribution<float> dist;
 
-    static void init(uint32_t seed) {
-        rng = std::mt19937(seed);
+    static void init(uint32_t base_seed) {
+        std::hash<std::thread::id> hasher;
+        uint32_t thread_seed = base_seed + static_cast<uint32_t>(hasher(std::this_thread::get_id()));
+        rng = std::mt19937(thread_seed);
         dist = std::uniform_real_distribution<float>(0.0f, 1.0f);
     }
 
