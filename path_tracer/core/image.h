@@ -128,8 +128,7 @@ struct Image {
         float exposure = (log_avg > EPS_SMALL) ? target_luminance / log_avg : 1.0f;
 
         for (int i = 0; i < width * height; ++i) {
-            Vec3f scaled = pixels[i] * exposure;
-            Vec3f pixel = (ToneMappingPreset == ToneMapping::ACES) ? tone_map_Aces(scaled) : tone_map_Agx(scaled);
+            Vec3f pixel = (ToneMappingPreset == ToneMapping::ACES) ? tone_map_Aces(pixels[i]) : tone_map_Agx(pixels[i] * exposure);
             for (int j = 0; j < 3; j++) {
                 data[3 * i + j] = static_cast<unsigned char>(255.0f * std::max(0.0f, std::min(1.0f, pixel[j])));
             }

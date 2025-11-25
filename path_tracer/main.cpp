@@ -94,7 +94,7 @@ Vec3f shade_mis(const int tri_idx, const Vec3f& p, const Vec3f wo) {
 
         LightSample light_sample = std::visit(sample_light, light);
 
-        if (light_sample.light_dist > EPS_SMALL) {
+        if (light_sample.light_dist > EPS_SMALL || is_delta) {
             float pdf_light = scene.light_pdf(light_index, light_select_pdf, p, light_sample.wi_world, light_sample.light_dist);
 
             if (pdf_light > EPS_SMALL) {
@@ -106,9 +106,11 @@ Vec3f shade_mis(const int tri_idx, const Vec3f& p, const Vec3f wo) {
 
                 if (!hit) {
                     Vec3f f = brdf_eval(material, wo, light_sample.wi_world, tri.normal);
-                    Vec3f contribution = eval_area_light(light, -light_sample.wi_world).cwiseProduct(f) * std::max(0.0f, tri.normal.dot(light_sample.wi_world));
-                    if (!is_delta) contribution /= pdf_light;
-                    L_dir += w_light * contribution;
+                    Vec3f emitted = eval_light(light, -light_sample.wi_world, light_sample.light_dist);
+                    if (emitted.maxCoeff() > 0.0f) {
+                        Vec3f contribution = emitted.cwiseProduct(f) * std::max(0.0f, tri.normal.dot(light_sample.wi_world)) / pdf_light;
+                        L_dir += w_light * contribution;
+                    }
                 }
             }
         }
@@ -135,7 +137,7 @@ Vec3f shade_mis(const int tri_idx, const Vec3f& p, const Vec3f wo) {
             }
 
             Vec3f f = brdf_eval(material, wo, ray_dir, tri.normal);
-            L_dir += w_brdf * eval_area_light(emitter, -ray_dir).cwiseProduct(f) * (std::max(0.0f, tri.normal.dot(ray_dir)) / pdf);
+            L_dir += w_brdf * eval_light(emitter, -ray_dir, t_min).cwiseProduct(f) * (std::max(0.0f, tri.normal.dot(ray_dir)) / pdf);
         }
 
         const float p_rr = 0.8f;
@@ -160,7 +162,7 @@ Vec3f mis_path_trace(Ray ray) {
     const Vec3f hit_pos = ray.at(t_min);
 
     if (scene.triangles[nearest_tri].is_emitter()) {
-        return eval_area_light(scene.lights[scene.triangle_to_light[nearest_tri]], -ray.direction);
+        return eval_light(scene.lights[scene.triangle_to_light[nearest_tri]], -ray.direction, t_min);
     }
 
     return shade_mis(nearest_tri, hit_pos, -ray.direction.normalized());
@@ -191,7 +193,8 @@ Image render_image(const RenderConfig& config, const Scene& scene, const Camera&
 
                     Ray ray = camera.generate_ray(u, (1.0f - v));
                     Vec3f path_trace = mis_path_trace(ray);
-                    image(x,y) += clamp(path_trace, Vec3f(0.0f, 0.0f, 0.0f), Vec3f(50.0f, 50.0f, 50.0f));
+                    // image(x,y) += clamp(path_trace, Vec3f(0.0f, 0.0f, 0.0f), Vec3f(50.0f, 50.0f, 50.0f));
+                    image(x,y) += path_trace;
                 }
 
                 image(x,y) /= (float)config.samples_per_pixel;
@@ -214,7 +217,8 @@ Image render_image(const RenderConfig& config, const Scene& scene, const Camera&
 
                 Ray ray = camera.generate_ray(u, (1.0f - v));
                 Vec3f path_trace = mis_path_trace(ray);
-                image(x,y) += clamp(path_trace, Vec3f(0.0f, 0.0f, 0.0f), Vec3f(50.0f, 50.0f, 50.0f));
+                // image(x,y) += clamp(path_trace, Vec3f(0.0f, 0.0f, 0.0f), Vec3f(50.0f, 50.0f, 50.0f));
+                image(x,y) += path_trace;
             }
 
             image(x,y) /= (float)config.samples_per_pixel;

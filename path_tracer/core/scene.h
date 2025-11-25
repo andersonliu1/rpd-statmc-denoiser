@@ -23,8 +23,10 @@ struct Scene {
 
     int add_light(const Light& light) {
         lights.push_back(light);
-        light_powers.push_back(std::visit([](const auto& l) { return l.power(); }, light));
-        light_cdf.push_back((light_cdf.empty()) ? light_powers.back() : light_cdf.back());
+        float power = std::visit([](const auto& l) { return l.power(); }, light);
+        light_powers.push_back(power);
+        float cumulative = light_cdf.empty() ? power : (light_cdf.back() + power);
+        light_cdf.push_back(cumulative);
         return static_cast<int>(lights.size() - 1);
     }
 
@@ -33,7 +35,9 @@ struct Scene {
     }
 
     float light_select_pdf(int light_idx) const {
-        return light_powers[light_idx] / light_cdf.back();
+        float total = light_cdf.empty() ? 0.0f : light_cdf.back();
+        if (total <= EPS_SMALL) return 0.0f;
+        return light_powers[light_idx] / total;
     }
 
     std::tuple<int, float> sample_light(float u) const {

@@ -126,6 +126,10 @@ struct PointLight {
         return std::max(0.0f, calc_luminance(intensity));
     }
 
+    Vec3f eval(const Vec3f&) const {
+        return intensity;
+    }
+
 };
 
 struct DirectionalLight {
@@ -138,16 +142,24 @@ struct DirectionalLight {
     float power() const {
         return std::max(0.0f, calc_luminance(intensity));
     }
+
+    Vec3f eval(const Vec3f&) const {
+        return intensity;
+    }
 };
 
 using Light = std::variant<RectLight, AreaLight, PointLight, DirectionalLight>;
 
-inline Vec3f eval_area_light(const Light& light, const Vec3f& light_dir) {
-    return std::visit([&](const auto& light) -> Vec3f {
-            using T = std::decay_t<decltype(light)>;
-            if constexpr (std::is_same_v<T, RectLight> || std::is_same_v<T, AreaLight>) return light.eval(light_dir);
-            return Vec3f::Zero();
-        }, light);
+inline Vec3f eval_light(const Light& light, const Vec3f& light_dir, float distance = 1.0f) {
+    return std::visit([&](const auto& light_obj) -> Vec3f {
+        using T = std::decay_t<decltype(light_obj)>;
+        Vec3f radiance = light_obj.eval(light_dir);
+        if constexpr (std::is_same_v<T, PointLight>) {
+            float falloff = std::max(distance * distance, EPS_SMALL);
+            return radiance / falloff;
+        }
+        return radiance;
+    }, light);
 }
 
 inline float calc_light_pdf(const Light& light, const Vec3f& p, const Vec3f& dir, float distance) {
@@ -157,7 +169,7 @@ inline float calc_light_pdf(const Light& light, const Vec3f& p, const Vec3f& dir
             return light_obj.pdf(p, dir, distance);
         }
 
-        return 0.0f;
+        return 1.0f;
     }, light);
 }
 
