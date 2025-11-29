@@ -234,6 +234,10 @@ struct Material {
     Material(const BRDF& v) : brdf(v) {}
 };
 
+inline Vec3f material_albedo(const Material& material) {
+    return std::visit([&](const auto& brdf) { return brdf.albedo; }, material.brdf);
+}
+
 inline Vec3f brdf_eval(const Material& material, Vec3f wo_world, Vec3f wi_world, Vec3f normal) {
     return std::visit([&](const auto& brdf) { return brdf.eval(wo_world, wi_world, normal); }, material.brdf);
 }

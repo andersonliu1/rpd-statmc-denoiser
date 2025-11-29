@@ -10,6 +10,6 @@ world_up: [0.0, 1.0, 0.0]
 focus_distance: 0.8
 
 # Rendering settings
-samples_per_pixel: 8
+samples_per_pixel: 32
 scene: cornell_box
-output: output/cornell.png
+output: cornell  # saves to output/cornell unless an absolute path is provided

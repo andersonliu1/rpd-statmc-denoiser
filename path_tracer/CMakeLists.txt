@@ -5,6 +5,7 @@ add_executable(path_tracer
 )
 
 target_include_directories(path_tracer PRIVATE
+    ${PROJECT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${PROJECT_SOURCE_DIR}/extern/stb
     ${PROJECT_SOURCE_DIR}/extern/tinyobjloader

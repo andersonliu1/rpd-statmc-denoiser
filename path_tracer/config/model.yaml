@@ -12,4 +12,4 @@ focus_distance: 0.8
 # Rendering settings
 samples_per_pixel: 512
 scene: dragon
-output: output/dragon.png
+output: dragon  # saves to output/dragon unless an absolute path is provided

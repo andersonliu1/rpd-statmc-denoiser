@@ -16,60 +16,24 @@
 #include "CLI/CLI.hpp"
 #include "spdlog/spdlog.h"
 #include "yaml-cpp/yaml.h"
+#include "shared/global.h"
 
+#include "core/buffers.h"
+#include "core/config.h"
 #include "core/common.h"
 #include "core/camera.h"
 #include "core/ray.h"
 #include "core/material.h"
 #include "core/sampler.h"
 #include "core/scene_loader.h"
-#include "core/image.h"
+#include "core/stats.h"
 #include "core/ray_tracer.h"
 
-struct RenderConfig {
-    int image_width;
-    int image_height;
-    int samples_per_pixel;
-    float fov;
-    float focus_distance;
-    float aperture;
-    Vec3f camera_position;
-    Vec3f camera_direction;
-    Vec3f camera_up;
-    std::optional<std::string> scene_name;
-    std::optional<std::string> output_path;
-};
 
 Scene scene{};
 BVH bvh{};
-
-RenderConfig parse_render_config(const YAML::Node& config) {
-    RenderConfig render_config{};
-    render_config.image_width = config["image_width"].as<int>();
-    render_config.image_height = config["image_height"].as<int>();
-    render_config.samples_per_pixel = config["samples_per_pixel"].as<int>();
-    render_config.fov = config["fov"].as<float>();
-
-    auto cam_pos = config["camera_position"].as<std::vector<float>>();
-    auto cam_direction = config["camera_direction"].as<std::vector<float>>();
-    std::vector<float> cam_up_vec = config["world_up"] ? config["world_up"].as<std::vector<float>>() : std::vector<float>{0.0f, 1.0f, 0.0f};
-    if (cam_pos.size() != 3 || cam_direction.size() != 3) {
-        throw std::runtime_error("Camera vectors must have three components");
-    }
-    if (cam_up_vec.size() != 3) {
-        throw std::runtime_error("world_up must have three components");
-    }
-
-    render_config.camera_position = Vec3f(cam_pos[0], cam_pos[1], cam_pos[2]);
-    render_config.camera_direction = Vec3f(cam_direction[0], cam_direction[1], cam_direction[2]);
-    render_config.camera_up = Vec3f(cam_up_vec[0], cam_up_vec[1], cam_up_vec[2]);
-    render_config.focus_distance = config["focus_distance"] ? config["focus_distance"].as<float>() : render_config.camera_direction.norm();
-    render_config.aperture = config["aperture"] ? config["aperture"].as<float>() : 0.0f;
-    if (config["scene"]) render_config.scene_name = config["scene"].as<std::string>();
-    if (config["output"]) render_config.output_path = config["output"].as<std::string>();
-
-    return render_config;
-}
+FrameBuffers buffers{};
+std::vector<PixelStats> pixelStats;
 
 Vec3f shade_mis(const int tri_idx, const Vec3f& p, const Vec3f wo) {
     const Triangle& tri = scene.triangles[tri_idx];
@@ -116,6 +80,22 @@ Vec3f shade_mis(const int tri_idx, const Vec3f& p, const Vec3f wo) {
         }
     }
 
+    
+    Vec3f env_dir = Sampler::sample_sphere();
+    constexpr float pdf_env = 1.0f / (4.0f * M_PI);
+
+    float brdf_pdf_env = brdf_pdf(material, wo, env_dir, tri.normal);
+    float w_env = pdf_env / (pdf_env + brdf_pdf_env);
+
+    Ray env_ray(offset_ray_origin(p, tri.normal), env_dir);
+    bool blocked = any_hit(env_ray, std::numeric_limits<float>::infinity(), bvh, scene.triangles);
+    if (!blocked) {
+        Vec3f f = brdf_eval(material, wo, env_dir, tri.normal);
+        float cos_term = std::max(0.0f, tri.normal.dot(env_dir));
+        L_dir += w_env * scene.environment_color.cwiseProduct(f) * (cos_term / pdf_env);
+    }
+    
+
     const auto [ray_dir, pdf] = brdf_sample(material, wo, tri.normal, Sampler::next2d());
 
     Vec3f L_indir = Vec3f::Zero();
@@ -138,6 +118,11 @@ Vec3f shade_mis(const int tri_idx, const Vec3f& p, const Vec3f wo) {
 
             Vec3f f = brdf_eval(material, wo, ray_dir, tri.normal);
             L_dir += w_brdf * eval_light(emitter, -ray_dir, t_min).cwiseProduct(f) * (std::max(0.0f, tri.normal.dot(ray_dir)) / pdf);
+        } else if (!is_ray_hit) {
+            constexpr float pdf_env = 1.0f / (4.0f * M_PI);
+            float w_brdf = pdf / (pdf + pdf_env);
+            Vec3f f = brdf_eval(material, wo, ray_dir, tri.normal);
+            L_dir += w_brdf * scene.environment_color.cwiseProduct(f) * (std::max(0.0f, tri.normal.dot(ray_dir)) / pdf);
         }
 
         const float p_rr = 0.8f;
@@ -155,11 +140,17 @@ Vec3f shade_mis(const int tri_idx, const Vec3f& p, const Vec3f wo) {
     return L_dir + L_indir;
 }
 
-Vec3f mis_path_trace(Ray ray) {
+Vec3f mis_path_trace(Ray ray, int index) {
     const auto [is_hit, t_min, nearest_tri] = closest_hit(ray, bvh, scene.triangles);
     if (!is_hit) return scene.environment_color;
 
+    buffers.hit_count[index]++;
+    buffers.depth[index] += t_min;
+    buffers.normal[index] += scene.triangles[nearest_tri].normal;
+    buffers.albedo[index] += material_albedo(scene.materials[scene.triangles[nearest_tri].material_id]);
+
     const Vec3f hit_pos = ray.at(t_min);
+    buffers.world_pos[index] += hit_pos;
 
     if (scene.triangles[nearest_tri].is_emitter()) {
         return eval_light(scene.lights[scene.triangle_to_light[nearest_tri]], -ray.direction, t_min);
@@ -168,8 +159,9 @@ Vec3f mis_path_trace(Ray ray) {
     return shade_mis(nearest_tri, hit_pos, -ray.direction.normalized());
 }
 
-Image render_image(const RenderConfig& config, const Scene& scene, const Camera& camera) {
-    Image image(config.image_width, config.image_height);
+void render_image(const RenderConfig& config, const Scene& scene, const Camera& camera) {
+    buffers.init(config.image_width, config.image_height);
+    pixelStats.assign(config.image_width * config.image_height, PixelStats{});
 
     spdlog::info("Rendering...");
 #ifdef _OPENMP
@@ -183,45 +175,26 @@ Image render_image(const RenderConfig& config, const Scene& scene, const Camera&
 #pragma omp parallel
     {
 #pragma omp for schedule(dynamic, 1)
-        for (int y = 0; y < config.image_height; ++y) {
-            for (int x = 0; x < config.image_width; ++x) {
-                image(x, y) = Vec3f::Zero();
-
-                for (int s = 0; s < config.samples_per_pixel; ++s) {
-                    const float u = (x + Sampler::next1d()) / (config.image_width);
-                    const float v = (y + Sampler::next1d()) / (config.image_height);
-
-                    Ray ray = camera.generate_ray(u, (1.0f - v));
-                    Vec3f path_trace = mis_path_trace(ray);
-                    // image(x,y) += clamp(path_trace, Vec3f(0.0f, 0.0f, 0.0f), Vec3f(50.0f, 50.0f, 50.0f));
-                    image(x,y) += path_trace;
-                }
-
-                image(x,y) /= (float)config.samples_per_pixel;
-            }
-
-            int finished = ++rows_completed;
-            if (finished % 50 == 0 || finished == config.image_height) {
-                spdlog::info("Rendering progress: {} / {}", finished, config.image_height);
-            }
-        }
-    }
-#else
+#endif
     for (int y = 0; y < config.image_height; ++y) {
         for (int x = 0; x < config.image_width; ++x) {
-            image(x, y) = Vec3f::Zero();
+            buffers.radiance(x, y) = Vec3f::Zero();
+            int idx = y * config.image_width + x;
 
             for (int s = 0; s < config.samples_per_pixel; ++s) {
                 const float u = (x + Sampler::next1d()) / (config.image_width);
                 const float v = (y + Sampler::next1d()) / (config.image_height);
 
                 Ray ray = camera.generate_ray(u, (1.0f - v));
-                Vec3f path_trace = mis_path_trace(ray);
-                // image(x,y) += clamp(path_trace, Vec3f(0.0f, 0.0f, 0.0f), Vec3f(50.0f, 50.0f, 50.0f));
-                image(x,y) += path_trace;
+                Vec3f path_trace = mis_path_trace(ray, idx);
+                
+                accumulate_sample(pixelStats[idx], path_trace);
+
+                buffers.radiance(x,y) += path_trace;
             }
 
-            image(x,y) /= (float)config.samples_per_pixel;
+            buffers.radiance(x,y) /= config.samples_per_pixel;
+            buffers.average(idx);
         }
 
         int finished = ++rows_completed;
@@ -229,26 +202,26 @@ Image render_image(const RenderConfig& config, const Scene& scene, const Camera&
             spdlog::info("Rendering progress: {} / {}", finished, config.image_height);
         }
     }
+#ifdef _OPENMP
+    }
 #endif
 
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
     spdlog::info("Rendering completed in {} ms", duration.count());
-
-    return image;
 }
 
 int main(int argc, char** argv) {
-    CLI::App app{"Monte Carlo path tracer with denoising"};
+    CLI::App app{"Monte Carlo path tracer"};
 
     std::string config_file;
     std::string scene_name;
-    std::string output_file;
+    std::string output_dir_cli;
     std::optional<uint32_t> sampler_seed;
 
     app.add_option("-c,--config", config_file, "Path to config YAML file")->required();
     app.add_option("-s,--scene", scene_name, "Name of the built-in scene to render (overrides config)");
-    app.add_option("-o,--output", output_file, "Output PNG file path");
+    app.add_option("-o,--output", output_dir_cli, "Output directory (absolute or relative). Image saved as <dir>/<name>.png");
     app.add_option("--seed", sampler_seed, "Optional RNG seed for the sampler");
 
     CLI11_PARSE(app, argc, argv);
@@ -275,20 +248,28 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    std::string output_path = !output_file.empty() ? output_file : render_config.output_path.value_or("");
-    if (output_path.empty()) {
-        spdlog::error("No output specified. Provide --output or set 'output' in the config.");
+    const std::filesystem::path default_output_root("output");
+    std::filesystem::path output_dir_path;
+
+    if (!output_dir_cli.empty()) {
+        output_dir_path = std::filesystem::path(output_dir_cli);
+        if (render_config.output_dir && output_dir_cli != *render_config.output_dir) {
+            spdlog::info("CLI output '{}' overrides config output '{}'", output_dir_cli, *render_config.output_dir);
+        }
+    } else if (render_config.output_dir) {
+        output_dir_path = std::filesystem::path(*render_config.output_dir);
+        if (!output_dir_path.is_absolute()) {
+            output_dir_path = default_output_root / output_dir_path;
+        }
+    } else {
+        spdlog::error("No output directory specified. Provide --output or set 'output' in the config.");
         return 1;
-    }
-    if (!output_file.empty() && render_config.output_path && output_file != *render_config.output_path) {
-        spdlog::info("CLI output '{}' overrides config output '{}'", output_file, *render_config.output_path);
     }
 
     spdlog::info("Image: {}x{}", render_config.image_width, render_config.image_height);
     spdlog::info("Samples per pixel: {}", render_config.samples_per_pixel);
-    spdlog::info("Camera position: [{}, {}, {}]", render_config.camera_position.x(), render_config.camera_position.y(), render_config.camera_position.z());
     spdlog::info("Scene: {}", scene_to_render);
-    spdlog::info("Output path: {}", output_path);
+    spdlog::info("Output directory: {}", output_dir_path.string());
 
     try {
         scene = scenes::load_scene(scene_to_render);
@@ -318,19 +299,56 @@ int main(int argc, char** argv) {
     }
     Sampler::init(seed);
 
-    Image image = render_image(render_config, scene, camera);
+    render_image(render_config, scene, camera);
 
-    const std::filesystem::path output_fs_path(output_path);
-    const std::filesystem::path parent_dir = output_fs_path.parent_path();
-    if (!parent_dir.empty()) {
-        std::error_code ec;
-        if (!std::filesystem::create_directories(parent_dir, ec) && ec) {
-            spdlog::warn("Failed to create directories for '{}': {}", output_path, ec.message());
+    output_dir_path = output_dir_path.lexically_normal();
+
+    if (output_dir_path.empty()) {
+        spdlog::error("Resolved output directory is empty");
+        return 1;
+    }
+
+    const std::string output_dir_name = output_dir_path.filename().string();
+    if (output_dir_name.empty() || output_dir_name == "." || output_dir_name == "/") {
+        spdlog::error("Output directory '{}' must include a leaf name to derive the PNG filename", output_dir_path.string());
+        return 1;
+    }
+
+    std::error_code exists_ec;
+    if (std::filesystem::exists(output_dir_path, exists_ec)) {
+        if (!std::filesystem::is_directory(output_dir_path, exists_ec)) {
+            spdlog::error("Output path '{}' exists but is not a directory", output_dir_path.string());
+            return 1;
+        }
+
+        std::error_code dir_iter_ec;
+        for (const auto& entry : std::filesystem::directory_iterator(output_dir_path, dir_iter_ec)) {
+            if (dir_iter_ec) {
+                spdlog::warn("Failed to enumerate existing contents of '{}': {}", output_dir_path.string(), dir_iter_ec.message());
+                break;
+            }
+            std::error_code remove_ec;
+            std::filesystem::remove_all(entry.path(), remove_ec);
+            if (remove_ec) {
+                spdlog::warn("Failed to remove '{}': {}", entry.path().string(), remove_ec.message());
+            }
+        }
+    } else {
+        if (exists_ec) {
+            spdlog::error("Failed to check output directory '{}': {}", output_dir_path.string(), exists_ec.message());
+            return 1;
+        }
+        std::error_code create_ec;
+        if (!std::filesystem::create_directories(output_dir_path, create_ec) && create_ec) {
+            spdlog::error("Failed to create output directory '{}': {}", output_dir_path.string(), create_ec.message());
+            return 1;
         }
     }
 
-    if (image.save_with_tonemapping(output_path)) {
-        spdlog::info("Saved to {}", output_path);
+    const std::filesystem::path output_path = output_dir_path / output_dir_name;
+
+    if (output_buffers(buffers, output_path.string())) {
+        spdlog::info("Successfully saved output to: {}", output_dir_path.string());
         return 0;
     }
 

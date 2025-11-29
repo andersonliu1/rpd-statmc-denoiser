@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <cmath>
 
-#include "common.h"
+#include "global.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
@@ -20,22 +20,10 @@ struct Image {
 
     enum class ToneMapping : uint8_t { AGXDefault, AGXGolden, AGXPunchy, ACES };
 
-    static constexpr ToneMapping ToneMappingPreset = ToneMapping::ACES; // Define Tonemapping Here
+    static constexpr ToneMapping ToneMappingPreset = ToneMapping::AGXDefault; // Define Tonemapping Here
 
     Image() = default;
     Image(int w, int h) : width(w), height(h), pixels(w * h, Vec3f::Zero()) {}
-
-    /// @brief Compute log-average luminance for exposure scaling.
-    float log_average_luminance(float delta = EPS) const {
-        if (pixels.empty()) return 0.0f;
-        double log_sum = 0.0;
-        for (const Vec3f& px : pixels) {
-            float lum = calc_luminance(px);
-            log_sum += std::log(std::max(delta, lum));
-        }
-        double avg = log_sum / static_cast<double>(pixels.size());
-        return static_cast<float>(std::exp(avg));
-    }
 
     /// @brief ACES-like Tone Mapping: https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/
     /// @param value 
@@ -62,7 +50,7 @@ struct Image {
         };
 
         const Vec3f inset_r0(0.842479062253094f, 0.0423282422610123f, 0.0423756549057051f);
-        const Vec3f inset_r1(0.0784336f, 0.878468636469772f, 0.0791661274605434f);
+        const Vec3f inset_r1(0.0784335999999992f, 0.878468636469772f, 0.0784336f);
         const Vec3f inset_r2(0.0792237451477643f, 0.0791661274605434f, 0.879142973793104f);
         Vec3f col = mul_rows(inset_r0, inset_r1, inset_r2, value).cwiseMax(Vec3f::Constant(EPS_SMALL));
 
@@ -105,13 +93,23 @@ struct Image {
         val = Vec3f::Constant(luma) + saturation * (val - Vec3f::Constant(luma));
 
         const Vec3f outset_r0(1.19687900512017f, -0.0528968517574562f, -0.0529716355144438f);
-        const Vec3f outset_r1(-0.0980208811401368f, 1.15190312990417f, -0.0989611768448433f);
-        const Vec3f outset_r2(-0.0990297440797205f, -0.0980434501171241f, 1.15107367264116f);
+        const Vec3f outset_r1(-0.0980208811401368f, 1.15190312990417f, -0.0980434501171241f);
+        const Vec3f outset_r2(-0.0990297440797205f, -0.0989611768448433f, 1.15107367264116f);
         Vec3f result = mul_rows(outset_r0, outset_r1, outset_r2, val);
-        return clamp(result, 0.0f, 1.0f);
+        return result.cwiseMin(Vec3f::Ones()).cwiseMax(Vec3f::Zero());
     }
 
     bool save(const std::string &filename) const {
+        std::vector<float> data(3 * width * height);
+        for (int i = 0; i < width * height; ++i) {
+            for (int j = 0; j < 3; ++j) {
+                data[3 * i + j] = pixels[i][j];
+            }
+        }
+        return stbi_write_hdr(filename.c_str(), width, height, 3, data.data()) != 0;
+    }
+
+    bool save_png(const std::string &filename) const {
         std::vector<uint8_t> data(3 * width * height);
         for (int i = 0; i < width * height; ++i) {
             for (int j = 0; j < 3; ++j) {
@@ -123,12 +121,11 @@ struct Image {
 
     bool save_with_tonemapping(const std::string &filename) const {
         std::vector<uint8_t> data(3 * width * height);
-        constexpr float target_luminance = 0.18f;
-        float log_avg = log_average_luminance();
-        float exposure = (log_avg > EPS_SMALL) ? target_luminance / log_avg : 1.0f;
 
         for (int i = 0; i < width * height; ++i) {
-            Vec3f pixel = (ToneMappingPreset == ToneMapping::ACES) ? tone_map_Aces(pixels[i]) : tone_map_Agx(pixels[i] * exposure);
+            Vec3f pixel = (ToneMappingPreset == ToneMapping::ACES)
+                              ? tone_map_Aces(pixels[i])
+                              : tone_map_Agx(pixels[i]);
             for (int j = 0; j < 3; j++) {
                 data[3 * i + j] = static_cast<unsigned char>(255.0f * std::max(0.0f, std::min(1.0f, pixel[j])));
             }
@@ -140,5 +137,11 @@ struct Image {
 
     const Vec3f &operator()(int x, int y) const {
         return pixels[y * width + x];
+    }
+
+    Vec3f &operator[](int i) { return pixels[i]; }
+
+    const Vec3f &operator[](int i) const {
+        return pixels[i];
     }
 };

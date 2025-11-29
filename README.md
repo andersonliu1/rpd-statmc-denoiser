@@ -37,11 +37,11 @@ to build or clean it without touching the others.
 ./build/path_tracer_build/path_tracer \
     -c path_tracer/config/test.yaml \
     --scene cornell_box \
-    -o output.png \
+    -o ./output/cornell \
     --seed 1234
 
 # or use the helper script to build (optional) and run:
-./trace.sh -- -c path_tracer/config/test.yaml -o output/cornell.png
+./trace.sh -- -c path_tracer/config/test.yaml -o ./output/cornell
 
 # Skip the build step if you already built:
 ./trace.sh --no-build -- -c path_tracer/config/test.yaml -s cornell_box
@@ -50,9 +50,11 @@ to build or clean it without touching the others.
 Arguments:
 - `-c, --config`: Image + camera + sampling settings (YAML). May include `scene` and `output`.
 - `--scene`: Built-in scene to render (overrides YAML `scene` when supplied).
-- `-o, --output`: Output PNG path. Overrides YAML `output` when supplied.
+- `-o, --output`: Output directory (absolute or relative to CWD). The renderer writes `<dir>/<leaf-name>.png`, where `leaf-name` is taken from the directory name. Overrides YAML `output` when supplied.
 - `--seed`: Optional sampler RNG seed (defaults to random).
 - Additional CLI arguments follow the same precedence rules: CLI overrides YAML, YAML is the fallback.
+
+YAML `output` values are treated as relative names (e.g., `output: cornell` saves to `output/cornell/cornell.png`) unless you supply an absolute path. CLI `-o` values are used as given: absolute paths go there; relative paths are resolved against the current working directory.
 
 
 ## Dependencies
