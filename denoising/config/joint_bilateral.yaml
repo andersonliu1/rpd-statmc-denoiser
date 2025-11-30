@@ -1,0 +1,11 @@
+raw: output/cornell/cornell_raw.hdr
+normal: output/cornell/cornell_normal.hdr
+albedo: output/cornell/cornell_albedo.hdr
+
+output: output/denoise
+
+sigma:
+  c: 0.3   # color
+  n: 0.2   # normal (radians)
+  p: 2.0   # pixel/position
+  a: 0.1   # albedo

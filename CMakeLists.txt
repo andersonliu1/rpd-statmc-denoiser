@@ -23,3 +23,4 @@ add_subdirectory(extern/yaml-cpp)
 add_subdirectory(extern/eigen)
 
 add_subdirectory(path_tracer)
+add_subdirectory(denoising)
