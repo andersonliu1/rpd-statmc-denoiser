@@ -34,8 +34,8 @@ to build or clean it without touching the others.
 
 ```bash
 # From the repo root after building
-./build/path_tracer_build/path_tracer \
-    -c path_tracer/config/test.yaml \
+./build/path_tracer_build/path_tracer/path_tracer \
+    -c path_tracer/config/cornell.yaml \
     --scene cornell_box \
     -o ./output/cornell \
     --seed 1234
