@@ -8,6 +8,8 @@
 #include <type_traits>
 #include <filesystem>
 #include <atomic>
+#include <limits>
+#include <cctype>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -17,6 +19,7 @@
 #include "spdlog/spdlog.h"
 #include "yaml-cpp/yaml.h"
 #include "shared/global.h"
+#include "shared/image.h"
 
 #include "core/buffers.h"
 #include "core/config.h"
@@ -34,7 +37,8 @@
 Scene scene{};
 BVH bvh{};
 FrameBuffers buffers{};
-std::vector<PixelStats> pixelStats;
+std::vector<PixelStats> pixel_stats;
+rpf::Grid rpf_grid{};
 
 struct HitInfo {
     PrimitiveType type;
@@ -92,7 +96,16 @@ struct HitInfo {
     }
 };
 
-Vec3f shade_mis(const HitInfo& hit) {
+std::optional<Image::ToneMapping> tonemap_from_string(std::string name) {
+    std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (name == "aces") return Image::ToneMapping::ACES;
+    if (name == "agx" || name == "agx-default" || name == "agx_default") return Image::ToneMapping::AGXDefault;
+    if (name == "agx-golden" || name == "agx_golden") return Image::ToneMapping::AGXGolden;
+    if (name == "agx-punchy" || name == "agx_punchy") return Image::ToneMapping::AGXPunchy;
+    return std::nullopt;
+}
+
+Vec3f shade_mis(const HitInfo& hit, rpf::Sample* rpf_sample = nullptr) {
     const Material& material = hit.get_material();
     const Vec3f& p = hit.position;
     const Vec3f& wo = hit.wo;
@@ -105,11 +118,15 @@ Vec3f shade_mis(const HitInfo& hit) {
     if (light_index >= 0) {
         Light light = scene.lights[light_index];
         bool is_delta = is_delta_light(light);
+        Vec2f light_u = Sampler::next2d();
+        if (rpf_sample && !rpf_sample->valid) {
+            rpf_sample->light_u = light_u;
+        }
 
         auto sample_light = [&](const auto& light_obj) {
             using T = std::decay_t<decltype(light_obj)>;
             if constexpr (std::is_same_v<T, RectLight> || std::is_same_v<T, AreaLight>) {
-                return light_obj.sample(p, Sampler::next2d());
+                return light_obj.sample(p, light_u);
             } else {
                 return light_obj.sample(p);
             }
@@ -154,8 +171,11 @@ Vec3f shade_mis(const HitInfo& hit) {
         L_dir += w_env * scene.environment_color.cwiseProduct(f) * (cos_term / pdf_env);
     }
 
-
-    const auto [ray_dir, pdf] = brdf_sample(material, wo, normal, Sampler::next2d());
+    Vec2f brdf_u = Sampler::next2d();
+    if (rpf_sample && !rpf_sample->valid) {
+        rpf_sample->brdf_u = brdf_u;
+    }
+    const auto [ray_dir, pdf] = brdf_sample(material, wo, normal, brdf_u);
 
     Vec3f L_indir = Vec3f::Zero();
 
@@ -201,32 +221,33 @@ Vec3f shade_mis(const HitInfo& hit) {
 
         const float p_rr = 0.8f;
         float ksi = Sampler::next1d();
+        if (rpf_sample && !rpf_sample->valid) {
+            rpf_sample->rr_u = ksi;
+        }
 
         if (ksi < p_rr) {
             if (is_ray_hit && !hit_is_emitter) {
                 const Vec3f next_hit_pos = brdf_ray.at(t_min);
                 Vec3f next_normal = (prim_type == PrimitiveType::Sphere) ? hit_normal : scene.triangles[idx].normal;
 
-                HitInfo next_hit;
-                next_hit.type = prim_type;
-                next_hit.index = idx;
-                next_hit.position = next_hit_pos;
-                next_hit.normal = next_normal;
-                next_hit.wo = -ray_dir;
+                HitInfo next_hit{prim_type, idx, next_hit_pos, next_normal, -ray_dir};
 
                 Vec3f f = brdf_eval(material, wo, ray_dir, normal);
-                L_indir = shade_mis(next_hit).cwiseProduct(f) * (std::max(0.0f, normal.dot(ray_dir)) / (pdf * p_rr));
+                L_indir = shade_mis(next_hit, rpf_sample).cwiseProduct(f) * (std::max(0.0f, normal.dot(ray_dir)) / (pdf * p_rr));
             }
         }
+    }
+
+    if (rpf_sample && !rpf_sample->valid) {
+        rpf_sample->valid = true;
     }
 
     return L_dir + L_indir;
 }
 
-Vec3f mis_path_trace(Ray ray, int index) {
+Vec3f mis_path_trace(Ray ray, int index, rpf::Sample* rpf_sample = nullptr) {
     const auto [is_hit, t_min, prim_type, idx, hit_normal] =
         closest_hit_combined(ray, bvh, scene.triangles, scene.spheres);
-
     if (!is_hit) return scene.environment_color;
 
     const Vec3f hit_pos = ray.at(t_min);
@@ -277,19 +298,89 @@ Vec3f mis_path_trace(Ray ray, int index) {
         return eval_light(scene.lights[light_idx], -ray.direction, t_min);
     }
 
-    HitInfo hit;
-    hit.type = prim_type;
-    hit.index = idx;
-    hit.position = hit_pos;
-    hit.normal = normal;
-    hit.wo = -ray.direction.normalized();
+    HitInfo hit{prim_type, idx, hit_pos, normal, -ray.direction.normalized()};
 
-    return shade_mis(hit);
+    return shade_mis(hit, rpf_sample);
+}
+
+void statmc_denoise(const RenderConfig& config) {
+    const int w = config.image_width;
+    const int h = config.image_height;
+    const int window_radius = config.statmc_window_radius;
+    const float normal_threshold = config.statmc_normal_threshold;
+    const float depth_threshold = config.statmc_depth_threshold;
+    const float compat_sigma = config.statmc_compat_sigma;
+
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            int idx = y * w + x;
+            if (buffers.hit_count[idx] == 0) continue;
+
+            const Vec3f normal_i = buffers.normal[idx];
+            const float depth_i = buffers.depth[idx];
+            const Vec3f mean_color_i = pixel_stats[idx].color_mean;
+            const float mean_lum_i = pixel_stats[idx].mean;
+            const float var_i = std::max(EPS_SMALL, pixel_stats[idx].variance());
+            const float sensitivity = buffers.sensitivity[idx];
+
+            float weight_sum = 0.0f;
+            Vec3f color_sum = Vec3f::Zero();
+            float var_sum = 0.0f;
+            int neighbor_count = 0;
+
+            for (int dy = -window_radius; dy <= window_radius; ++dy) {
+                int yy = y + dy;
+                if (yy < 0 || yy >= h) continue;
+                for (int dx = -window_radius; dx <= window_radius; ++dx) {
+                    int xx = x + dx;
+                    if (xx < 0 || xx >= w || (dx == 0 && dy == 0)) continue;
+
+                    int neighbor_idx = yy * w + xx;
+                    if (buffers.hit_count[neighbor_idx] == 0) continue;
+
+                    const Vec3f normal_j = buffers.normal[neighbor_idx];
+                    if (normal_i.dot(normal_j) < normal_threshold) continue;
+
+                    const float depth_j = buffers.depth[neighbor_idx];
+                    float depth_gate = std::abs(depth_i - depth_j) / std::max({depth_i, depth_j, EPS_SMALL});
+                    if (depth_gate > depth_threshold) continue;
+
+                    const float mean_lum_j = pixel_stats[neighbor_idx].mean;
+                    const float var_j = std::max(EPS_SMALL, pixel_stats[neighbor_idx].variance());
+                    if (std::abs(mean_lum_i - mean_lum_j) > compat_sigma * std::sqrt(var_i + var_j)) continue;
+
+                    const float weight_j = 1.0f / var_j;
+                    color_sum += pixel_stats[neighbor_idx].color_mean * weight_j;
+                    var_sum += var_j;
+                    weight_sum += weight_j;
+                    neighbor_count++;
+                }
+            }
+
+            Vec3f mean_color_neighbors = mean_color_i;
+            float var_neighbors = var_i;
+            if (neighbor_count > 0 && weight_sum > EPS_SMALL) {
+                mean_color_neighbors = color_sum / weight_sum;
+                var_neighbors = var_sum / float(neighbor_count);
+            }
+
+            const float shrinkage_k = config.statmc_shrinkage_k;
+            float alpha_base = var_i / (var_i + shrinkage_k);
+            float alpha = std::clamp(std::pow(alpha_base, 1.0f - sensitivity), 0.0f, 1.0f);
+
+            Vec3f denoised = lerp(mean_color_i, mean_color_neighbors, 1.0f - alpha);
+            float uncertainty = alpha * alpha * var_i + (1.0f - alpha) * (1.0f - alpha) * var_neighbors;
+
+            buffers.denoised(x, y) = denoised;
+            buffers.uncertainty[idx] = uncertainty;
+        }
+    }
+>>>>>>> 8c71288 (adaptive modeling)
 }
 
 void render_image(const RenderConfig& config, const Scene& scene, const Camera& camera) {
     buffers.init(config.image_width, config.image_height);
-    pixelStats.assign(config.image_width * config.image_height, PixelStats{});
+    pixel_stats.assign(config.image_width * config.image_height, PixelStats{});
 
     spdlog::info("Rendering...");
 #ifdef _OPENMP
@@ -306,17 +397,17 @@ void render_image(const RenderConfig& config, const Scene& scene, const Camera& 
 #endif
     for (int y = 0; y < config.image_height; ++y) {
         for (int x = 0; x < config.image_width; ++x) {
-            buffers.radiance(x, y) = Vec3f::Zero();
             int idx = y * config.image_width + x;
 
             for (int s = 0; s < config.samples_per_pixel; ++s) {
                 const float u = (x + Sampler::next1d()) / (config.image_width);
                 const float v = (y + Sampler::next1d()) / (config.image_height);
 
-                Ray ray = camera.generate_ray(u, (1.0f - v));
+                Vec2f lens_sample = Sampler::sample_disk();
+                Ray ray = camera.generate_ray(u, (1.0f - v), lens_sample);
                 Vec3f path_trace = mis_path_trace(ray, idx);
-                
-                accumulate_sample(pixelStats[idx], path_trace);
+
+                accumulate_sample(pixel_stats[idx], path_trace);
 
                 buffers.radiance(x,y) += path_trace;
             }
@@ -339,17 +430,179 @@ void render_image(const RenderConfig& config, const Scene& scene, const Camera& 
     spdlog::info("Rendering completed in {} ms", duration.count());
 }
 
+void render_image_statmc(const RenderConfig& config, const Scene& scene, const Camera& camera) {
+    buffers.init(config.image_width, config.image_height);
+    pixel_stats.assign(config.image_width * config.image_height, PixelStats{});
+    rpf_grid.init(config.image_width, config.image_height, config.rpf_tile_size);
+    rpf_grid.reset();
+
+    spdlog::info("Rendering (StatMC/RPF)...");
+#ifdef _OPENMP
+    spdlog::info("OpenMP threads: {}", omp_get_max_threads());
+#endif
+    auto start = std::chrono::high_resolution_clock::now();
+
+    std::atomic<int> rows_completed{0};
+
+#ifdef _OPENMP
+#pragma omp parallel
+    {
+#pragma omp for schedule(dynamic, 1)
+#endif
+    for (int y = 0; y < config.image_height; ++y) {
+        for (int x = 0; x < config.image_width; ++x) {
+            int idx = y * config.image_width + x;
+
+            for (int s = 0; s < config.samples_per_pixel; ++s) {
+                const float u = (x + Sampler::next1d()) / (config.image_width);
+                const float v = (y + Sampler::next1d()) / (config.image_height);
+
+                Vec2f lens_sample = Sampler::sample_disk();
+                rpf::Sample rpf_sample{};
+                rpf_sample.lens_u = lens_sample;
+
+                Ray ray = camera.generate_ray(u, (1.0f - v), lens_sample);
+                Vec3f path_trace = mis_path_trace(ray, idx, &rpf_sample);
+                
+                if (rpf_sample.valid) {
+                    const float sample_lum = calc_luminance(path_trace);
+                    if (std::isfinite(sample_lum)) {
+                        const int tile_idx = rpf_grid.id_from_pixel(x, y);
+#ifdef _OPENMP
+#pragma omp critical
+#endif
+                        {
+                            auto& tile = rpf_grid.tiles[tile_idx];
+                            tile.brdf.add(rpf_sample.brdf_u.x(), rpf_sample.brdf_u.y(), sample_lum);
+                            tile.lens.add(rpf_sample.lens_u.x(), rpf_sample.lens_u.y(), sample_lum);
+                            tile.light.add(rpf_sample.light_u.x(), rpf_sample.light_u.y(), sample_lum);
+                            tile.rr.add(rpf_sample.rr_u, sample_lum);
+                        }
+                    }
+                }
+
+                accumulate_sample(pixel_stats[idx], path_trace);
+
+                buffers.radiance(x,y) += path_trace;
+            }
+
+            buffers.radiance(x,y) /= config.samples_per_pixel;
+            buffers.average(idx);
+        }
+
+        int finished = ++rows_completed;
+        if (finished % 50 == 0 || finished == config.image_height) {
+            spdlog::info("Rendering progress: {} / {}", finished, config.image_height);
+        }
+    }
+#ifdef _OPENMP
+    }
+#endif
+
+    for (int ty = 0; ty < rpf_grid.tiles_y; ++ty) {
+        for (int tx = 0; tx < rpf_grid.tiles_x; ++tx) {
+            const int x0 = tx * rpf_grid.tile_size;
+            const int y0 = ty * rpf_grid.tile_size;
+            const int x1 = std::min(config.image_width, x0 + rpf_grid.tile_size);
+            const int y1 = std::min(config.image_height, y0 + rpf_grid.tile_size);
+            const int tile_pixels = (x1 - x0) * (y1 - y0);
+            const float expected_hits = float(tile_pixels) * config.samples_per_pixel;
+            int hit_sum = 0;
+            for (int yy = y0; yy < y1; ++yy) {
+                for (int xx = x0; xx < x1; ++xx) {
+                    hit_sum += buffers.hit_count[yy * config.image_width + xx];
+                }
+            }
+            if (hit_sum == 0) continue;
+
+            const rpf::Tile& base_tile = rpf_grid(tx, ty);
+            if (base_tile.brdf.n == 0) continue;
+
+            rpf::Tile pooled = base_tile;
+            const int target_samples = (config.rpf_target_samples > 0) ? config.rpf_target_samples : std::max(rpf::Grid::MIN_SAMPLES, int(0.5f * expected_hits));
+            int max_radius = 0;
+            if (pooled.brdf.n < target_samples && expected_hits > 0.0f) {
+                const int radius_cap = (config.rpf_max_radius >= 0) ? config.rpf_max_radius : rpf::Grid::MAX_RADIUS;
+                if (config.rpf_max_radius >= 0) {
+                    max_radius = radius_cap;
+                } else {
+                    float ratio = float(target_samples) / std::max(1.0f, float(pooled.brdf.n));
+                    max_radius = std::min(radius_cap, std::max(1, int(std::ceil(std::sqrt(ratio) - 1.0f))));
+                }
+                const int grid_bound = std::max(0, std::min(rpf_grid.tiles_x, rpf_grid.tiles_y) - 1);
+                max_radius = std::min(max_radius, grid_bound);
+            }
+            int combined_n = pooled.brdf.n;
+            for (int radius = 1; radius <= max_radius && combined_n < target_samples; ++radius) {
+                int min_y = std::max(0, ty - radius);
+                int max_y = std::min(rpf_grid.tiles_y - 1, ty + radius);
+                int min_x = std::max(0, tx - radius);
+                int max_x = std::min(rpf_grid.tiles_x - 1, tx + radius);
+                for (int ny = min_y; ny <= max_y; ++ny) {
+                    for (int nx = min_x; nx <= max_x; ++nx) {
+                        int dx = nx - tx;
+                        int dy = ny - ty;
+                        if (std::max(std::abs(dx), std::abs(dy)) != radius) continue;
+                        const auto& neighbor = rpf_grid(nx, ny);
+                        pooled.brdf.merge(neighbor.brdf);
+                        pooled.lens.merge(neighbor.lens);
+                        pooled.light.merge(neighbor.light);
+                        pooled.rr.merge(neighbor.rr);
+                    }
+                }
+                combined_n = pooled.brdf.n;
+            }
+            const float S = pooled.computeTileSensitivity();
+            const float coverage = std::clamp(hit_sum / expected_hits, 0.0f, 1.0f);
+            const float S_scaled = S * coverage;
+            for (int yy = y0; yy < y1; ++yy) {
+                for (int xx = x0; xx < x1; ++xx) {
+                    buffers.sensitivity[yy * config.image_width + xx] = S_scaled;
+                }
+            }
+        }
+    }
+
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    spdlog::info("Rendering completed in {} ms", duration.count());
+}
+
 int main(int argc, char** argv) {
     CLI::App app{"Monte Carlo path tracer"};
 
     std::string config_file;
     std::string scene_name;
     std::string output_dir_cli;
+    bool statmc_enable_cli = false;
+    bool statmc_disable_cli = false;
+    int rpf_tile_size_cli = -1;
+    int rpf_target_samples_cli = std::numeric_limits<int>::min();
+    int rpf_max_radius_cli = std::numeric_limits<int>::min();
+    int statmc_window_radius_cli = std::numeric_limits<int>::min();
+    float statmc_normal_thresh_cli = std::numeric_limits<float>::quiet_NaN();
+    float statmc_depth_thresh_cli = std::numeric_limits<float>::quiet_NaN();
+    float statmc_compat_sigma_cli = std::numeric_limits<float>::quiet_NaN();
+    float statmc_shrinkage_k_cli = std::numeric_limits<float>::quiet_NaN();
+    std::string tonemap_cli;
     std::optional<uint32_t> sampler_seed;
 
+    // Rendering / scene
     app.add_option("-c,--config", config_file, "Path to config YAML file")->required();
     app.add_option("-s,--scene", scene_name, "Name of the built-in scene to render (overrides config)");
     app.add_option("-o,--output", output_dir_cli, "Output directory (absolute or relative). Image saved as <dir>/<name>.png");
+    // StatMC / RPF
+    app.add_flag("--statmc", statmc_enable_cli, "Enable StatMC/RPF rendering");
+    app.add_flag("--no-statmc", statmc_disable_cli, "Disable StatMC/RPF rendering");
+    app.add_option("--rpf-tile-size", rpf_tile_size_cli, "Tile size for RPF (StatMC)")->check(CLI::PositiveNumber);
+    app.add_option("--rpf-target-samples", rpf_target_samples_cli, "Target pooled samples per tile for RPF (-1 = auto)"); // manual validation to allow -1
+    app.add_option("--rpf-max-radius", rpf_max_radius_cli, "Max pooling radius (tiles) for RPF (-1 = auto)");
+    app.add_option("--statmc-window-radius", statmc_window_radius_cli, "StatMC denoiser window radius (pixels)")->check(CLI::PositiveNumber);
+    app.add_option("--statmc-normal-thresh", statmc_normal_thresh_cli, "StatMC normal dot threshold (0,1]");
+    app.add_option("--statmc-depth-thresh", statmc_depth_thresh_cli, "StatMC relative depth threshold (>=0)");
+    app.add_option("--statmc-compat-sigma", statmc_compat_sigma_cli, "StatMC compatibility sigma (>0)");
+    app.add_option("--statmc-shrinkage-k", statmc_shrinkage_k_cli, "StatMC shrinkage stabilizer (>0)");
+    app.add_option("--tonemap", tonemap_cli, "Tonemapping preset: aces | agx | agx-golden | agx-punchy");
     app.add_option("--seed", sampler_seed, "Optional RNG seed for the sampler");
 
     CLI11_PARSE(app, argc, argv);
@@ -367,6 +620,11 @@ int main(int argc, char** argv) {
         render_config = parse_render_config(config);
     } catch (const std::exception& e) {
         spdlog::error("Failed to parse render config: {}", e.what());
+        return 1;
+    }
+
+    if (statmc_enable_cli && statmc_disable_cli) {
+        spdlog::error("Cannot specify both --statmc and --no-statmc");
         return 1;
     }
 
@@ -394,10 +652,92 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    bool use_statmc = render_config.use_statmc;
+    if (statmc_enable_cli) use_statmc = true;
+    if (statmc_disable_cli) use_statmc = false;
+    const int rpf_tile_size = (rpf_tile_size_cli > 0) ? rpf_tile_size_cli : render_config.rpf_tile_size;
+    if (rpf_tile_size <= 0) {
+        spdlog::error("RPF tile size must be positive");
+        return 1;
+    }
+    int rpf_target_samples = render_config.rpf_target_samples;
+    if (rpf_target_samples_cli != std::numeric_limits<int>::min()) {
+        rpf_target_samples = rpf_target_samples_cli;
+    }
+    if (rpf_target_samples == 0 || rpf_target_samples < -1) {
+        spdlog::error("rpf_target_samples must be -1 or positive");
+        return 1;
+    }
+    int rpf_max_radius = render_config.rpf_max_radius;
+    if (rpf_max_radius_cli != std::numeric_limits<int>::min()) {
+        rpf_max_radius = rpf_max_radius_cli;
+    }
+    if (rpf_max_radius < -1) {
+        spdlog::error("rpf_max_radius must be -1 or non-negative");
+        return 1;
+    }
+    int statmc_window_radius = render_config.statmc_window_radius;
+    if (statmc_window_radius_cli != std::numeric_limits<int>::min()) {
+        statmc_window_radius = statmc_window_radius_cli;
+    }
+    if (statmc_window_radius <= 0) {
+        spdlog::error("statmc_window_radius must be positive");
+        return 1;
+    }
+    float statmc_normal_thresh = std::isnan(statmc_normal_thresh_cli) ? render_config.statmc_normal_threshold : statmc_normal_thresh_cli;
+    if (statmc_normal_thresh <= 0.0f || statmc_normal_thresh > 1.0f) {
+        spdlog::error("statmc_normal_thresh must be in (0,1]");
+        return 1;
+    }
+    float statmc_depth_thresh = std::isnan(statmc_depth_thresh_cli) ? render_config.statmc_depth_threshold : statmc_depth_thresh_cli;
+    if (statmc_depth_thresh < 0.0f) {
+        spdlog::error("statmc_depth_thresh must be non-negative");
+        return 1;
+    }
+    float statmc_compat_sigma = std::isnan(statmc_compat_sigma_cli) ? render_config.statmc_compat_sigma : statmc_compat_sigma_cli;
+    if (statmc_compat_sigma <= 0.0f) {
+        spdlog::error("statmc_compat_sigma must be positive");
+        return 1;
+    }
+    float statmc_shrinkage_k = std::isnan(statmc_shrinkage_k_cli) ? render_config.statmc_shrinkage_k : statmc_shrinkage_k_cli;
+    if (statmc_shrinkage_k <= 0.0f) {
+        spdlog::error("statmc_shrinkage_k must be positive");
+        return 1;
+    }
+    std::string tonemap_name = render_config.tonemap;
+    if (!tonemap_cli.empty()) {
+        if (render_config.tonemap != tonemap_cli) {
+            spdlog::info("CLI tonemap '{}' overrides config tonemap '{}'", tonemap_cli, render_config.tonemap);
+        }
+        tonemap_name = tonemap_cli;
+    }
+    auto tonemap_parsed = tonemap_from_string(tonemap_name);
+    if (!tonemap_parsed) {
+        spdlog::error("Unknown tonemap preset '{}'. Allowed: aces, agx, agx-golden, agx-punchy", tonemap_name);
+        return 1;
+    }
+    render_config.tonemap = tonemap_name;
+    Image::ToneMapping tonemap_preset = *tonemap_parsed;
+
+    render_config.use_statmc = use_statmc;
+    render_config.rpf_tile_size = rpf_tile_size;
+    render_config.rpf_target_samples = rpf_target_samples;
+    render_config.rpf_max_radius = rpf_max_radius;
+    render_config.statmc_window_radius = statmc_window_radius;
+    render_config.statmc_normal_threshold = statmc_normal_thresh;
+    render_config.statmc_depth_threshold = statmc_depth_thresh;
+    render_config.statmc_compat_sigma = statmc_compat_sigma;
+    render_config.statmc_shrinkage_k = statmc_shrinkage_k;
+
     spdlog::info("Image: {}x{}", render_config.image_width, render_config.image_height);
     spdlog::info("Samples per pixel: {}", render_config.samples_per_pixel);
+    spdlog::info("Camera position: [{}, {}, {}]", render_config.camera_position.x(), render_config.camera_position.y(), render_config.camera_position.z());
     spdlog::info("Scene: {}", scene_to_render);
     spdlog::info("Output directory: {}", output_dir_path.string());
+    spdlog::info("StatMC enabled: {}", render_config.use_statmc);
+    spdlog::info("RPF tile size: {}", render_config.rpf_tile_size);
+    spdlog::info("StatMC window radius: {}", render_config.statmc_window_radius);
+    spdlog::info("Tonemap: {}", render_config.tonemap);
 
     try {
         scene = scenes::load_scene(scene_to_render);
@@ -428,7 +768,12 @@ int main(int argc, char** argv) {
     }
     Sampler::init(seed);
 
-    render_image(render_config, scene, camera);
+    if (render_config.use_statmc) {
+        render_image_statmc(render_config, scene, camera);
+        statmc_denoise(render_config);
+    } else {
+        render_image(render_config, scene, camera);
+    }
 
     output_dir_path = output_dir_path.lexically_normal();
 
@@ -476,7 +821,7 @@ int main(int argc, char** argv) {
 
     const std::filesystem::path output_path = output_dir_path / output_dir_name;
 
-    if (output_buffers(buffers, output_path.string())) {
+    if (output_buffers(buffers, output_path.string(), tonemap_preset)) {
         spdlog::info("Successfully saved output to: {}", output_dir_path.string());
         return 0;
     }
