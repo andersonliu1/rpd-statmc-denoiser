@@ -206,7 +206,7 @@ bool filter(
         img.pixels[i] = Vec3f(result[3 * i], result[3 * i + 1], result[3 * i + 2]);
     }
     const std::string png_path = (output_dir / "atrous_wavelet.png").string();
-    img.save_with_tonemapping(png_path);
+    img.save_with_tonemapping(png_path, Image::ToneMapping::AGXDefault);
 
     stbi_image_free(raw);
     stbi_image_free(normal);

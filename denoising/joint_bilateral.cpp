@@ -154,9 +154,10 @@ bool filter(const char* raw_file, const char* normal_file, const char* albedo_fi
     const std::string bilateral_png = (output_dir / "bilateral.png").string();
     const std::string joint_png = (output_dir / "joint.png").string();
 
-    img_gaussian.save_with_tonemapping(gaussian_png);
-    img_bilateral.save_with_tonemapping(bilateral_png);
-    img_joint.save_with_tonemapping(joint_png);
+    const Image::ToneMapping tonemap = Image::ToneMapping::AGXDefault;
+    img_gaussian.save_with_tonemapping(gaussian_png, tonemap);
+    img_bilateral.save_with_tonemapping(bilateral_png, tonemap);
+    img_joint.save_with_tonemapping(joint_png, tonemap);
 
     stbi_image_free(raw);
     stbi_image_free(normal);
