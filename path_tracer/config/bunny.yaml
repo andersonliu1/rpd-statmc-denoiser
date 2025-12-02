@@ -1,4 +1,4 @@
-# Bunny mesh scene - showcasing OBJ mesh support
+# Image settings
 image_width: 1280
 image_height: 720
 
@@ -9,7 +9,30 @@ camera_direction: [0.0, 0.0, 1.0]
 world_up: [0.0, 1.0, 0.0]
 focus_distance: 0.8
 
+# Camera settings
 # Rendering settings
 samples_per_pixel: 512
 scene: bunny
 output: bunny
+tonemap: agx  # options: aces, agx, agx-golden, agx-punchy
+
+# StatMC / Adaptive settings
+statmc_enabled: false
+rpf_tile_size: 8
+rpf_target_samples: -1  # -1 = auto
+rpf_max_radius: -1      # -1 = auto
+color_window_radius: 1        # Color window radius (pixels)
+color_normal_threshold: 0.95  # dot threshold for normal gating
+color_depth_threshold: 0.01   # relative depth threshold
+color_compat_sigma: 1.5       # Welch-style compatibility sigma
+color_shrinkage_k: 0.001      # shrinkage stabilizer
+var_window_radius: 1
+var_normal_threshold: 0.95
+var_depth_threshold: 0.01
+var_compat_sigma: 1.5
+var_shrinkage_k: 0.001
+var_iterations: 2
+adaptive_base_samples: 0
+adaptive_spp: 0
+adaptive_sigma_max: 3.0
+adaptive_passes: 1

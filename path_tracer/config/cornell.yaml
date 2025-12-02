@@ -32,3 +32,5 @@ var_shrinkage_k: 0.001
 var_iterations: 2
 adaptive_base_samples: 0
 adaptive_spp: 0
+adaptive_sigma_max: 3.0
+adaptive_passes: 1
