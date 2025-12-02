@@ -69,6 +69,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ "$BUILD_DIR" = /* ]]; then
+    BUILD_PATH="$BUILD_DIR"
+else
+    BUILD_PATH="${REPO_ROOT}/${BUILD_DIR}"
+fi
 
 case "$MODE" in
     joint)
@@ -92,7 +97,8 @@ if [[ "$SKIP_BUILD" == false ]]; then
     "${BUILD_CMD[@]}"
 fi
 
-BIN_PATH="${REPO_ROOT}/${BUILD_DIR}/${TARGET}/${TARGET}"
+# Binaries are placed under <build>/denoising/<target> by CMake
+BIN_PATH="${BUILD_PATH}/denoising/${TARGET}"
 if [[ ! -x "$BIN_PATH" ]]; then
     echo "Executable not found at '${BIN_PATH}'. Build may have failed." >&2
     exit 1

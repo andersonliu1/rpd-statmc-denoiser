@@ -11,6 +11,7 @@
 #include "scenes/caustics.h"
 #include "scenes/debug_scene.h"
 #include "scenes/dragon.h"
+#include "scenes/bunny_dof.h"
 
 namespace scenes {
 
@@ -41,13 +42,16 @@ namespace scenes {
         if (name == "bunny") {
             return make_bunny();
         }
+        if (name == "bunny_dof") {
+            return make_bunny_dof();
+        }
         if (name == "dragon") {
             return make_dragon();
         }
 
         throw std::runtime_error("Unknown scene '" + name + "'. Available scenes:\n"
             "  Primitives: cornell_box, cornell_spheres, veach_mis, material_showcase, caustics\n"
-            "  Meshes: bunny, dragon\n"
+            "  Meshes: bunny, bunny_dof, dragon\n"
             "  Debug: debug");
     }
 

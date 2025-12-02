@@ -503,6 +503,23 @@ void statmc_denoise(const RenderConfig& config) {
     const float depth_threshold = config.color_depth_threshold;
     const float compat_sigma = config.color_compat_sigma;
 
+    std::vector<Vec3f> normals_unit(w * h, Vec3f::Zero());
+    std::vector<float> depth_avg(w * h, 0.0f);
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+    for (int i = 0; i < w * h; ++i) {
+        if (buffers.hit_count[i] > 0) {
+            Vec3f n = buffers.normal[i] / float(buffers.hit_count[i]);
+            if (n.squaredNorm() > EPS_SMALL) n.normalize();
+            normals_unit[i] = n;
+            depth_avg[i] = buffers.depth[i] / float(buffers.hit_count[i]);
+        } else {
+            normals_unit[i] = buffers.normal[i];
+            depth_avg[i] = buffers.depth[i];
+        }
+    }
+
 #ifdef _OPENMP
 #pragma omp parallel for schedule(dynamic, 1)
 #endif
@@ -511,9 +528,8 @@ void statmc_denoise(const RenderConfig& config) {
             int idx = y * w + x;
             if (buffers.hit_count[idx] == 0) continue;
 
-            Vec3f normal_i = (buffers.hit_count[idx] > 0) ? (buffers.normal[idx] / float(buffers.hit_count[idx])) : buffers.normal[idx];
-            if (normal_i.squaredNorm() > EPS_SMALL) normal_i.normalize();
-            const float depth_i = (buffers.hit_count[idx] > 0) ? buffers.depth[idx] / float(buffers.hit_count[idx]) : buffers.depth[idx];
+            const Vec3f normal_i = normals_unit[idx];
+            const float depth_i = depth_avg[idx];
             const Vec3f mean_color_i = pixel_stats[idx].color_mean;
             const float mean_lum_i = pixel_stats[idx].mean;
             const float var_i = std::max(EPS_SMALL, pixel_stats[idx].variance());
@@ -534,11 +550,10 @@ void statmc_denoise(const RenderConfig& config) {
                     int neighbor_idx = yy * w + xx;
                     if (buffers.hit_count[neighbor_idx] == 0) continue;
 
-                    Vec3f normal_j = (buffers.hit_count[neighbor_idx] > 0) ? (buffers.normal[neighbor_idx] / float(buffers.hit_count[neighbor_idx])) : buffers.normal[neighbor_idx];
-                    if (normal_j.squaredNorm() > EPS_SMALL) normal_j.normalize();
+                    const Vec3f normal_j = normals_unit[neighbor_idx];
                     if (normal_i.dot(normal_j) < normal_threshold) continue;
 
-                    const float depth_j = (buffers.hit_count[neighbor_idx] > 0) ? buffers.depth[neighbor_idx] / float(buffers.hit_count[neighbor_idx]) : buffers.depth[neighbor_idx];
+                    const float depth_j = depth_avg[neighbor_idx];
                     float depth_gate = std::abs(depth_i - depth_j) / std::max({depth_i, depth_j, EPS_SMALL});
                     if (depth_gate > depth_threshold) continue;
 
@@ -586,11 +601,34 @@ void var_mean_denoise(const RenderConfig& config) {
 
     std::vector<float> curr(w * h, 0.0f);
     std::vector<float> next(w * h, 0.0f);
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
     for (int i = 0; i < w * h; ++i) {
         curr[i] = std::max(EPS_SMALL, pixel_stats[i].variance_of_mean());
     }
 
+    std::vector<Vec3f> normals_unit(w * h, Vec3f::Zero());
+    std::vector<float> depth_avg(w * h, 0.0f);
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+    for (int i = 0; i < w * h; ++i) {
+        if (buffers.hit_count[i] > 0) {
+            Vec3f n = buffers.normal[i] / float(buffers.hit_count[i]);
+            if (n.squaredNorm() > EPS_SMALL) n.normalize();
+            normals_unit[i] = n;
+            depth_avg[i] = buffers.depth[i] / float(buffers.hit_count[i]);
+        } else {
+            normals_unit[i] = buffers.normal[i];
+            depth_avg[i] = buffers.depth[i];
+        }
+    }
+
     auto smooth_once = [&](const std::vector<float>& src, std::vector<float>& dst) {
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic, 1)
+#endif
         for (int y = 0; y < h; ++y) {
             for (int x = 0; x < w; ++x) {
                 int idx = y * w + x;
@@ -599,9 +637,8 @@ void var_mean_denoise(const RenderConfig& config) {
                     continue;
                 }
 
-                Vec3f normal_i = (buffers.hit_count[idx] > 0) ? (buffers.normal[idx] / float(buffers.hit_count[idx])) : buffers.normal[idx];
-                if (normal_i.squaredNorm() > EPS_SMALL) normal_i.normalize();
-                const float depth_i = (buffers.hit_count[idx] > 0) ? buffers.depth[idx] / float(buffers.hit_count[idx]) : buffers.depth[idx];
+                const Vec3f normal_i = normals_unit[idx];
+                const float depth_i = depth_avg[idx];
                 const float var_i = std::max(EPS_SMALL, src[idx]);
 
                 float weight_sum = 0.0f;
@@ -617,11 +654,10 @@ void var_mean_denoise(const RenderConfig& config) {
                         int neighbor_idx = yy * w + xx;
                         if (buffers.hit_count[neighbor_idx] == 0) continue;
 
-                        Vec3f normal_j = (buffers.hit_count[neighbor_idx] > 0) ? (buffers.normal[neighbor_idx] / float(buffers.hit_count[neighbor_idx])) : buffers.normal[neighbor_idx];
-                        if (normal_j.squaredNorm() > EPS_SMALL) normal_j.normalize();
+                        const Vec3f normal_j = normals_unit[neighbor_idx];
                         if (normal_i.dot(normal_j) < normal_threshold) continue;
 
-                        const float depth_j = (buffers.hit_count[neighbor_idx] > 0) ? buffers.depth[neighbor_idx] / float(buffers.hit_count[neighbor_idx]) : buffers.depth[neighbor_idx];
+                        const float depth_j = depth_avg[neighbor_idx];
                         float depth_gate = std::abs(depth_i - depth_j) / std::max({depth_i, depth_j, EPS_SMALL});
                         if (depth_gate > depth_threshold) continue;
 
@@ -667,11 +703,17 @@ std::vector<int> compute_adaptive_sample_counts(const RenderConfig& config) {
     float sum_importance = 0.0f;
 
     std::vector<float> var_raw(w * h, 0.0f);
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
     for (int i = 0; i < w * h; ++i) {
         var_raw[i] = std::max(EPS_SMALL, pixel_stats[i].variance_of_mean());
     }
 
 
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) reduction(+:sum_importance)
+#endif
     for (int i = 0; i < w * h; ++i) {
         float var_denoised = std::max(EPS_SMALL, buffers.var_mean_denoised[i]);
         float var_mod = std::clamp(std::max(var_raw[i], var_denoised), SIGMA_MIN * SIGMA_MIN, SIGMA_MAX * SIGMA_MAX);
@@ -764,12 +806,6 @@ void render_image_adaptive(const RenderConfig& config, const Camera& camera) {
 void render(const RenderConfig& config, const Camera& camera, const std::filesystem::path& output_path) {
     if (config.use_statmc) {
         render_image_statmc(config, camera);
-        const std::string base = output_path.string();
-
-        bool statmc_intermediate_ok = save_statmc_intermediates(buffers, base);
-        if (!statmc_intermediate_ok) {
-            spdlog::warn("Failed to save one or more StatMC intermediate buffers");
-        }
 
         for (int i = 0; i < config.adaptive_passes; ++i) {
             statmc_denoise(config);
@@ -780,6 +816,7 @@ void render(const RenderConfig& config, const Camera& camera, const std::filesys
         statmc_denoise(config);
         var_mean_denoise(config);
         buffers.finalize();
+        buffers.radiance = buffers.denoised;
     } else {
         render_image(config, camera);
         buffers.finalize();
@@ -813,12 +850,14 @@ int main(int argc, char** argv) {
     float adaptive_sigma_max_cli = std::numeric_limits<float>::quiet_NaN();
     int adaptive_passes_cli = std::numeric_limits<int>::min();
     std::string tonemap_cli;
+    int samples_per_pixel_cli = std::numeric_limits<int>::min();
     std::optional<uint32_t> sampler_seed;
 
     // Rendering / scene
     app.add_option("-c,--config", config_file, "Path to config YAML file")->required();
     app.add_option("-s,--scene", scene_name, "Name of the built-in scene to render (overrides config)");
     app.add_option("-o,--output", output_dir_cli, "Output directory (absolute or relative). Image saved as <dir>/<name>.png");
+    app.add_option("--spp", samples_per_pixel_cli, "Override samples per pixel (>0)")->check(CLI::PositiveNumber);
     // StatMC / RPF
     app.add_flag("--statmc", statmc_enable_cli, "Enable StatMC/RPF rendering");
     app.add_flag("--no-statmc", statmc_disable_cli, "Disable StatMC/RPF rendering");
@@ -888,6 +927,16 @@ int main(int argc, char** argv) {
     } else {
         spdlog::error("No output directory specified. Provide --output or set 'output' in the config.");
         return 1;
+    }
+
+    int samples_per_pixel = render_config.samples_per_pixel;
+    if (samples_per_pixel_cli != std::numeric_limits<int>::min()) {
+        samples_per_pixel = samples_per_pixel_cli;
+        if (samples_per_pixel <= 0) {
+            spdlog::error("Samples per pixel must be positive");
+            return 1;
+        }
+        spdlog::info("CLI samples-per-pixel {} overrides config {}", samples_per_pixel_cli, render_config.samples_per_pixel);
     }
 
     bool use_statmc = render_config.use_statmc;
@@ -1037,6 +1086,7 @@ int main(int argc, char** argv) {
     render_config.adaptive_spp = adaptive_spp;
     render_config.adaptive_sigma_max = adaptive_sigma_max;
     render_config.adaptive_passes = adaptive_passes;
+    render_config.samples_per_pixel = samples_per_pixel;
 
     spdlog::info("Image: {}x{}", render_config.image_width, render_config.image_height);
     spdlog::info("Samples per pixel: {}", render_config.samples_per_pixel);

@@ -1,0 +1,38 @@
+# Rendering settings
+image_width: 1024
+image_height: 1024
+# Baseline spp (override via --spp on CLI)
+samples_per_pixel: 8
+scene: bunny_dof
+output: bunny_dof  # saves to output/bunny_dof unless an absolute path is provided
+tonemap: aces  # options: aces, agx, agx-golden, agx-punchy
+
+# Camera settings
+fov: 38.6
+camera_position: [0.278, 0.2744, -0.8]
+camera_direction: [0.0, 0.0, 1.0]
+world_up: [0.0, 1.0, 0.0]
+focus_distance: 1.0
+aperture: 0.08
+
+# StatMC settings
+statmc_enabled: false  # override with --statmc / --no-statmc
+rpf_tile_size: 16
+rpf_target_samples: -1  # -1 = auto
+rpf_max_radius: -1      # -1 = auto
+color_window_radius: 5
+color_normal_threshold: 0.7
+color_depth_threshold: 0.2
+color_compat_sigma: 3.0
+color_shrinkage_k: 0.03
+var_window_radius: 5
+var_normal_threshold: 0.7
+var_depth_threshold: 0.15
+var_compat_sigma: 3.0
+var_shrinkage_k: 0.01
+var_iterations: 6
+# Adaptive sampling (only used when StatMC is enabled)
+adaptive_spp: 0             # Total extra samples (spp); override via --adaptive-spp
+adaptive_base_samples: 0    # Baseline extra samples per pixel
+adaptive_sigma_max: 6.0     # Clamp for variance used in adaptive importance
+adaptive_passes: 1          # Number of adaptive refinement passes

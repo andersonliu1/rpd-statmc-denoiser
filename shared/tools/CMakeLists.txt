@@ -5,6 +5,7 @@ set(TOOLS_SOURCES
     compare_png.cpp
     hdr_metrics.cpp
     eval_tools.cpp
+    tonemap_hdr.cpp
 )
 
 foreach(tool_src IN LISTS TOOLS_SOURCES)

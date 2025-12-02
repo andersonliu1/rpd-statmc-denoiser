@@ -96,11 +96,9 @@ inline bool output_buffers(const FrameBuffers& fb, const std::string& directory,
 
     bool ok = true;
     ok &= save_image_if_valid(fb.radiance, ".png", true);
-    ok &= save_image_if_valid(fb.radiance, "_raw.hdr");
+    ok &= save_image_if_valid(fb.radiance, ".hdr");
 
     if (statmc) {
-        ok &= save_image_if_valid(fb.denoised, "_denoised.hdr");
-        ok &= save_image_if_valid(fb.denoised, "_denoised.png", true);
         ok &= save_scalar_buffer(fb.sensitivity, "_sensitivity.hdr");
         ok &= save_scalar_buffer(fb.uncertainty, "_uncertainty.hdr");
         ok &= save_scalar_buffer(fb.var_mean_denoised, "_vardenoised.hdr");
@@ -111,24 +109,5 @@ inline bool output_buffers(const FrameBuffers& fb, const std::string& directory,
     ok &= save_image_if_valid(fb.world_pos, "_worldpos.hdr");
     ok &= save_scalar_buffer(fb.depth, "_depth.hdr");
 
-    return ok;
-}
-
-inline bool save_statmc_intermediates(const FrameBuffers& fb, const std::string& base_path) {
-
-    bool ok = true;
-    Image raw_avg = normalize_image(fb.radiance, fb.sample_count);
-    Image albedo = normalize_image(fb.albedo, fb.hit_count);
-    Image normal = normalize_image(fb.normal, fb.hit_count, true);
-    Image world_pos = normalize_image(fb.world_pos, fb.hit_count);
-    Image depth = scalar_to_image(fb.depth, fb.radiance.width, fb.radiance.height, &fb.hit_count);
-    Image sensitivity = scalar_to_image(fb.sensitivity, fb.radiance.width, fb.radiance.height);
-
-    ok &= raw_avg.save(base_path + "_statmc_raw.hdr");
-    ok &= albedo.save(base_path + "_statmc_albedo.hdr");
-    ok &= normal.save(base_path + "_statmc_normal.hdr");
-    ok &= world_pos.save(base_path + "_statmc_worldpos.hdr");
-    ok &= depth.save(base_path + "_statmc_depth.hdr");
-    ok &= sensitivity.save(base_path + "_statmc_sensitivity.hdr");
     return ok;
 }

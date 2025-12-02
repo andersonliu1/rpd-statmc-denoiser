@@ -1,6 +1,6 @@
-raw: output/cornell/cornell_raw.hdr
-normal: output/cornell/cornell_normal.hdr
-albedo: output/cornell/cornell_albedo.hdr
+raw: output/bunny_dof_uniform8/bunny_dof_uniform8_raw.hdr
+normal: output/bunny_dof_uniform8/bunny_dof_uniform8_normal.hdr
+albedo: output/bunny_dof_uniform8/bunny_dof_uniform8_albedo.hdr
 
 output: output/denoise
 

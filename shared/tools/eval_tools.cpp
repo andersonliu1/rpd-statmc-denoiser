@@ -4,10 +4,7 @@
 #include <string>
 #include <vector>
 
-#define STB_IMAGE_IMPLEMENTATION
-#include <stb_image.h>
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include <stb_image_write.h>
+#include "shared/image.h"
 
 static int compare_hdr(const char* a_path, const char* b_path) {
     int w1, h1, c1, w2, h2, c2;

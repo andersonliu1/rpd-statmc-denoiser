@@ -9,6 +9,7 @@ Commands:
   compare-hdr   <a.hdr> <b.hdr>
   compare-png   <a.png> <b.png>
   hdr-metrics   <ref.hdr> <test.hdr> [residual.hdr]
+  tonemap       <input.hdr> <output.png> [tonemap]
 
 Options:
   -B, --build-dir <dir>     Build directory (default: build)
@@ -79,10 +80,35 @@ if [[ "$SKIP_BUILD" == false ]]; then
     "${BUILD_CMD[@]}"
 fi
 
-BIN_PATH="${REPO_ROOT}/${BUILD_DIR}/shared/tools/eval_tools/eval_tools"
-if [[ ! -x "$BIN_PATH" ]]; then
-    echo "Executable not found at '${BIN_PATH}'. Build may have failed." >&2
-    exit 1
-fi
+# CMake places binaries under build/<dir>/shared/tools by default.
+BIN_CANDIDATES=(
+    "${REPO_ROOT}/${BUILD_DIR}/shared/tools/eval_tools"
+    "${REPO_ROOT}/${BUILD_DIR}/shared/tools/eval_tools/eval_tools"
+    "${REPO_ROOT}/${BUILD_DIR}/shared/tools/tonemap_hdr"
+)
 
-exec "$BIN_PATH" "$COMMAND" "$@"
+BIN_PATH=""
+TONEMAP_BIN=""
+for cand in "${BIN_CANDIDATES[@]}"; do
+    if [[ -x "$cand" ]]; then
+        if [[ "$cand" == *tonemap_hdr ]]; then
+            TONEMAP_BIN="$cand"
+        else
+            BIN_PATH="$cand"
+        fi
+    fi
+done
+
+if [[ "$COMMAND" == "tonemap" ]]; then
+    if [[ -z "$TONEMAP_BIN" ]]; then
+        echo "tonemap_hdr executable not found under '${BUILD_DIR}/shared/tools'." >&2
+        exit 1
+    fi
+    exec "$TONEMAP_BIN" "$@"
+else
+    if [[ -z "$BIN_PATH" ]]; then
+        echo "Executable not found in expected locations under '${BUILD_DIR}' for eval_tools. Build may have failed." >&2
+        exit 1
+    fi
+    exec "$BIN_PATH" "$COMMAND" "$@"
+fi
