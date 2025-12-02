@@ -73,9 +73,9 @@ void atrous_filter_pass(
             float c_b = input[3 * idx + 2];
             float c_lum = luminance(c_r, c_g, c_b);
 
-            float n_r = normal[3 * idx] * 2.0f - 1.0f;
-            float n_g = normal[3 * idx + 1] * 2.0f - 1.0f;
-            float n_b = normal[3 * idx + 2] * 2.0f - 1.0f;
+            float n_r = normal[3 * idx];
+            float n_g = normal[3 * idx + 1];
+            float n_b = normal[3 * idx + 2];
             normalize(n_r, n_g, n_b);
 
             float a_r = albedo[3 * idx];
@@ -99,9 +99,9 @@ void atrous_filter_pass(
                 float p_b = input[3 * n_idx + 2];
                 float p_lum = luminance(p_r, p_g, p_b);
 
-                float pn_r = normal[3 * n_idx] * 2.0f - 1.0f;
-                float pn_g = normal[3 * n_idx + 1] * 2.0f - 1.0f;
-                float pn_b = normal[3 * n_idx + 2] * 2.0f - 1.0f;
+                float pn_r = normal[3 * n_idx];
+                float pn_g = normal[3 * n_idx + 1];
+                float pn_b = normal[3 * n_idx + 2];
                 normalize(pn_r, pn_g, pn_b);
 
                 float pa_r = albedo[3 * n_idx];
