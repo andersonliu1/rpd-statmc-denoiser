@@ -13,13 +13,13 @@ world_up: [0.0, 1.0, 0.0]
 focus_distance: 0.8
 
 # Rendering settings
-samples_per_pixel: 512
+samples_per_pixel: 8
 scene: cornell_spheres
 output: cornell_spheres
 tonemap: agx  # options: aces, agx, agx-golden, agx-punchy
 
 # StatMC / Adaptive settings
-statmc_enabled: false
+statmc_enabled: true
 rpf_tile_size: 8
 rpf_target_samples: -1  # -1 = auto
 rpf_max_radius: -1      # -1 = auto
@@ -32,9 +32,9 @@ var_window_radius: 1
 var_normal_threshold: 0.95
 var_depth_threshold: 0.01
 var_compat_sigma: 1.5
-var_shrinkage_k: 0.001
+var_shrinkage_k: 0.002
 var_iterations: 2
 adaptive_base_samples: 0
-adaptive_spp: 0
+adaptive_spp: 2
 adaptive_sigma_max: 3.0
 adaptive_passes: 1

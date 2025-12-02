@@ -24,3 +24,4 @@ add_subdirectory(extern/eigen)
 
 add_subdirectory(path_tracer)
 add_subdirectory(denoising)
+add_subdirectory(shared/tools)

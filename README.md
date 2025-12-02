@@ -40,7 +40,7 @@ to build or clean it without touching the others.
     -o ./output/cornell \
     --seed 1234
 
-# or use the helper script to build (optional) and run:
+# or use the helper script to build (optional) and run (parallel build by default):
 ./trace.sh -- -c path_tracer/config/test.yaml -o ./output/cornell
 
 # Skip the build step if you already built:
@@ -61,16 +61,59 @@ Arguments:
 
 YAML `output` values are treated as relative names (e.g., `output: cornell` saves to `output/cornell/cornell.png`) unless you supply an absolute path. CLI `-o` values are used as given: absolute paths go there; relative paths are resolved against the current working directory.
 
-StatMC/RPF settings in YAML:
+StatMC/RPF/adaptive settings in YAML (flat keys):
 
 ```yaml
 tonemap: agx  # aces | agx | agx-golden | agx-punchy
-statmc:
-  enabled: false
-  rpf_tile_size: 8
-  rpf_target_samples: -1  # -1 = auto
-  rpf_max_radius: -1      # -1 = auto
+statmc_enabled: false
+rpf_tile_size: 8
+rpf_target_samples: -1  # -1 = auto
+rpf_max_radius: -1      # -1 = auto
+color_window_radius: 1
+color_normal_threshold: 0.95
+color_depth_threshold: 0.01
+color_compat_sigma: 1.5
+color_shrinkage_k: 0.001
+var_window_radius: 1
+var_normal_threshold: 0.95
+var_depth_threshold: 0.01
+var_compat_sigma: 1.5
+var_shrinkage_k: 0.001
+var_iterations: 2
+adaptive_base_samples: 0
+adaptive_spp: 0
+adaptive_sigma_max: 3.0
+adaptive_passes: 1
 ```
+
+### Denoisers
+
+Use `denoise.sh` to build/run the denoising executables with consistent flags:
+
+```bash
+# Joint bilateral
+./denoise.sh joint -- --config denoising/config/joint_bilateral.yaml --raw output/foo/foo_raw.hdr --normal ... --albedo ... -o output/foo/bilateral
+
+# À trous wavelet
+./denoise.sh trous -- --config denoising/config/atrous_wavelet.yaml --raw ... --normal ... --albedo ... --iterations 5 -o output/foo/atrous
+
+# Skip the build step if already built
+./denoise.sh joint --no-build -- --config ...
+```
+
+Options: `-B/--build-dir` to choose a build dir (default `build`), `--parallel/--no-parallel` to toggle parallel build.
+
+### Evaluation tools
+
+Build target `eval_tools` (or use `run.sh --target eval_tools`). Binary lives at `build/shared/tools/eval_tools`. Subcommands:
+
+```bash
+./build/shared/tools/eval_tools/eval_tools compare-hdr a.hdr b.hdr
+./build/shared/tools/eval_tools/eval_tools compare-png a.png b.png
+./build/shared/tools/eval_tools/eval_tools hdr-metrics ref.hdr test.hdr [residual.hdr]
+```
+
+Standalone binaries `compare_hdr`, `compare_png`, and `hdr_metrics` are also built in the same folder.
 
 
 ## Dependencies
@@ -87,3 +130,4 @@ statmc:
 - [A Statistical Approach to Monte Carlo Denoising](https://users.cg.tuwien.ac.at/~hiroyuki/StatMC/) - Sakai et al., SIGGRAPH Asia 2024
 - [Statistical Error Reduction for Monte Carlo Rendering](https://users.cg.tuwien.ac.at/~hiroyuki/StatER/) - Sakai et al., SIGGRAPH Asia 2025
 - [P-RPF: Pixel-Based Random Parameter Filtering for Monte Carlo Rendering](https://ieeexplore.ieee.org/document/6814987/) - Park et al., CAD/Graphics 2013
+- [Random-Parameter Filtering for Monte Carlo Rendering](https://dl.acm.org/doi/10.1145/2167076.2167083) - Sen and Darabi, EGSR 2012

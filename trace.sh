@@ -8,6 +8,7 @@ BUILD_ROOT="build"
 BUILD_DIR=""
 TARGET="path_tracer"
 SKIP_BUILD=false
+PARALLEL=true
 CONFIG_ARGS=()
 RUN_ARGS=()
 
@@ -21,6 +22,7 @@ Options:
   --cmake-arg <arg>         Extra argument forwarded to the CMake configure step
                             (repeat this option for multiple arguments)
   --no-build                Assume the target is already built and skip invoking run.sh
+  -j, --no-parallel         Disable parallel build (parallel on by default)
   -h, --help                Show this message
 
 All arguments after '--' are passed directly to the path tracer executable.
@@ -50,6 +52,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-build)
             SKIP_BUILD=true
+            shift
+            ;;
+        -j|--no-parallel)
+            PARALLEL=false
             shift
             ;;
         -h|--help)
@@ -89,6 +95,9 @@ if [[ "$SKIP_BUILD" == false ]]; then
     if [[ ${#CONFIG_ARGS[@]} -gt 0 ]]; then
         BUILD_CMD+=("--")
         BUILD_CMD+=("${CONFIG_ARGS[@]}")
+    fi
+    if [[ "$PARALLEL" == true ]]; then
+        BUILD_CMD+=("--parallel")
     fi
     "${BUILD_CMD[@]}"
 fi
