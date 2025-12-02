@@ -28,4 +28,20 @@ inline Light make_rect_light(const Vec3f& pos, const Vec3f& width, const Vec3f& 
     return light;
 }
 
+inline std::vector<Triangle> make_ground_plane(float size, float y, int material_id) {
+    std::vector<Triangle> triangles;
+    float half = size * 0.5f;
+
+    Vec3f v0(-half, y, -half);
+    Vec3f v1(half, y, -half);
+    Vec3f v2(half, y, half);
+    Vec3f v3(-half, y, half);
+
+    // Counter-clockwise winding for upward-facing normal
+    triangles.push_back(make_triangle(v0, v2, v1, material_id));
+    triangles.push_back(make_triangle(v0, v3, v2, material_id));
+
+    return triangles;
+}
+
 } // namespace scenes

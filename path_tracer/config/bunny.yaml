@@ -1,4 +1,4 @@
-# Dragon mesh scene - showcasing OBJ mesh support
+# Bunny mesh scene - showcasing OBJ mesh support
 image_width: 1280
 image_height: 720
 
@@ -11,5 +11,5 @@ focus_distance: 0.8
 
 # Rendering settings
 samples_per_pixel: 512
-scene: dragon
-output: dragon
+scene: bunny
+output: bunny

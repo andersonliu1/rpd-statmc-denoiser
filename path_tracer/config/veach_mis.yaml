@@ -1,0 +1,19 @@
+# Veach Multiple Importance Sampling Test Scene
+# Classic benchmark from Eric Veach's PhD thesis
+# Demonstrates MIS effectiveness with varying light sizes and material roughness
+
+# Image settings
+image_width: 1920
+image_height: 1080
+
+# Camera settings
+fov: 45.0
+camera_position: [0.0, 2.0, -8.0]
+camera_direction: [0.0, -0.15, 1.0]
+world_up: [0.0, 1.0, 0.0]
+focus_distance: 8.0
+
+# Rendering settings
+samples_per_pixel: 512
+scene: veach_mis
+output: veach_mis

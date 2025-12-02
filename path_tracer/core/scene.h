@@ -8,6 +8,7 @@
 #include "material.h"
 #include "ray.h"
 #include "triangle.h"
+#include "sphere.h"
 
 struct Scene {
     int add_material(const Material& material) {
@@ -21,6 +22,12 @@ struct Scene {
         return static_cast<int>(triangles.size() - 1);
     }
 
+    int add_sphere(const Sphere& sphere) {
+        spheres.push_back(sphere);
+        sphere_to_light.push_back(-1);
+        return static_cast<int>(spheres.size() - 1);
+    }
+
     int add_light(const Light& light) {
         lights.push_back(light);
         float power = std::visit([](const auto& l) { return l.power(); }, light);
@@ -32,6 +39,10 @@ struct Scene {
 
     void link_triangle_to_light(int triangle_index, int light_index) {
         triangle_to_light[triangle_index] = light_index;
+    }
+
+    void link_sphere_to_light(int sphere_index, int light_index) {
+        sphere_to_light[sphere_index] = light_index;
     }
 
     float light_select_pdf(int light_idx) const {
@@ -56,12 +67,15 @@ struct Scene {
     Vec3f environment_color = Vec3f::Zero();
 
     size_t triangle_count() const { return triangles.size(); }
+    size_t sphere_count() const { return spheres.size(); }
     size_t material_count() const { return materials.size(); }
 
     std::vector<Triangle> triangles;
+    std::vector<Sphere> spheres;
     std::vector<Material> materials;
     std::vector<Light> lights;
     std::vector<int> triangle_to_light;
+    std::vector<int> sphere_to_light;
     std::vector<float> light_cdf;
     std::vector<float> light_powers;
 };

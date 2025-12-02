@@ -265,3 +265,98 @@ static bool any_hit(const Ray& ray, const float tMax, const BVH& bvh, const std:
     auto [hit, t, tri] = bvh.traverse_bvh(triangles, bvh.root, ray, tMax, true);
     return hit;
 }
+
+#include "sphere.h"
+#include "primitive_type.h"
+
+/// @brief Finds the closest sphere hit for the given ray
+/// @param ray Ray to trace
+/// @param spheres Array of spheres
+/// @return (hit, t, sphere_index, normal)
+static std::tuple<bool, float, uint32_t, Vec3f> closest_sphere_hit(
+    const Ray& ray,
+    const std::vector<Sphere>& spheres
+) {
+    bool hit_anything = false;
+    float closest_t = std::numeric_limits<float>::infinity();
+    uint32_t closest_sphere = UINT32_MAX;
+    Vec3f closest_normal = Vec3f::Zero();
+
+    for (size_t i = 0; i < spheres.size(); ++i) {
+        auto [hit, t, normal] = Sphere::ray_sphere_intersect(spheres[i], ray, EPS_SMALL, closest_t);
+        if (hit && t < closest_t) {
+            hit_anything = true;
+            closest_t = t;
+            closest_sphere = static_cast<uint32_t>(i);
+            closest_normal = normal;
+        }
+    }
+
+    return {hit_anything, closest_t, closest_sphere, closest_normal};
+}
+
+/// @brief Tests whether the ray hits any sphere
+/// @param ray Ray to trace
+/// @param tMax Maximum distance to check
+/// @param spheres Array of spheres
+/// @return True if any intersection occurs before tMax
+static bool any_sphere_hit(
+    const Ray& ray,
+    const float tMax,
+    const std::vector<Sphere>& spheres
+) {
+    float effective_max = tMax - EPS_ANYHIT;
+    if (effective_max <= EPS_SMALL) return false;
+
+    for (const auto& sphere : spheres) {
+        auto [hit, t, normal] = Sphere::ray_sphere_intersect(sphere, ray, EPS_SMALL, effective_max);
+        if (hit) return true;
+    }
+
+    return false;
+}
+
+/// @brief Combined closest hit test for both triangles and spheres
+/// @return (hit, t, primitive_type, primitive_index, normal)
+///         if primitive_type==Triangle, use triangle normal from triangles[index]
+///         if primitive_type==Sphere, normal is provided directly
+static std::tuple<bool, float, PrimitiveType, uint32_t, Vec3f> closest_hit_combined(
+    const Ray& ray,
+    const BVH& bvh,
+    const std::vector<Triangle>& triangles,
+    const std::vector<Sphere>& spheres
+) {
+    // Test triangles
+    auto [tri_hit, tri_t, tri_idx] = closest_hit(ray, bvh, triangles);
+
+    // Test spheres
+    auto [sphere_hit, sphere_t, sphere_idx, sphere_normal] = closest_sphere_hit(ray, spheres);
+
+    // Determine which is closer
+    if (tri_hit && sphere_hit) {
+        if (tri_t < sphere_t) {
+            return {true, tri_t, PrimitiveType::Triangle, tri_idx, Vec3f::Zero()};
+        } else {
+            return {true, sphere_t, PrimitiveType::Sphere, sphere_idx, sphere_normal};
+        }
+    } else if (tri_hit) {
+        return {true, tri_t, PrimitiveType::Triangle, tri_idx, Vec3f::Zero()};
+    } else if (sphere_hit) {
+        return {true, sphere_t, PrimitiveType::Sphere, sphere_idx, sphere_normal};
+    } else {
+        return {false, 0.0f, PrimitiveType::Triangle, UINT32_MAX, Vec3f::Zero()};
+    }
+}
+
+/// @brief Combined any hit test for both triangles and spheres
+static bool any_hit_combined(
+    const Ray& ray,
+    const float tMax,
+    const BVH& bvh,
+    const std::vector<Triangle>& triangles,
+    const std::vector<Sphere>& spheres
+) {
+    if (any_hit(ray, tMax, bvh, triangles)) return true;
+    if (any_sphere_hit(ray, tMax, spheres)) return true;
+    return false;
+}

@@ -1,0 +1,19 @@
+# Material Showcase Scene
+# Displays various BRDF models: diffuse, metals, glossy, mirror
+# Studio lighting setup for professional presentation
+
+# Image settings
+image_width: 1920
+image_height: 1080
+
+# Camera settings
+fov: 40.0
+camera_position: [0.0, 3.5, -10.0]
+camera_direction: [0.0, -0.2, 1.0]
+world_up: [0.0, 1.0, 0.0]
+focus_distance: 10.0
+
+# Rendering settings
+samples_per_pixel: 512
+scene: material_showcase
+output: material_showcase

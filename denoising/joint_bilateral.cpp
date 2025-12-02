@@ -139,6 +139,25 @@ bool filter(const char* raw_file, const char* normal_file, const char* albedo_fi
     stbi_write_hdr(bilateral_path.c_str(), w, h, 3, bilateral);
     stbi_write_hdr(joint_path.c_str(), w, h, 3, joint);
 
+    // Save PNG versions with tone mapping
+    Image img_gaussian(w, h);
+    Image img_bilateral(w, h);
+    Image img_joint(w, h);
+
+    for (int i = 0; i < w * h; i++) {
+        img_gaussian.pixels[i] = Vec3f(gaussian[3 * i], gaussian[3 * i + 1], gaussian[3 * i + 2]);
+        img_bilateral.pixels[i] = Vec3f(bilateral[3 * i], bilateral[3 * i + 1], bilateral[3 * i + 2]);
+        img_joint.pixels[i] = Vec3f(joint[3 * i], joint[3 * i + 1], joint[3 * i + 2]);
+    }
+
+    const std::string gaussian_png = (output_dir / "gaussian.png").string();
+    const std::string bilateral_png = (output_dir / "bilateral.png").string();
+    const std::string joint_png = (output_dir / "joint.png").string();
+
+    img_gaussian.save_with_tonemapping(gaussian_png);
+    img_bilateral.save_with_tonemapping(bilateral_png);
+    img_joint.save_with_tonemapping(joint_png);
+
     stbi_image_free(raw);
     stbi_image_free(normal);
     stbi_image_free(albedo);

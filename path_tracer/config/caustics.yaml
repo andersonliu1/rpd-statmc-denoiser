@@ -1,0 +1,19 @@
+# Caustics Scene
+# Mirror spheres creating dramatic light focusing effects
+# High sample count needed for caustics convergence
+
+# Image settings
+image_width: 1920
+image_height: 1080
+
+# Camera settings
+fov: 50.0
+camera_position: [0.0, 3.5, -7.0]
+camera_direction: [0.0, -0.25, 1.0]
+world_up: [0.0, 1.0, 0.0]
+focus_distance: 7.5
+
+# Rendering settings
+samples_per_pixel: 512
+scene: caustics
+output: caustics
