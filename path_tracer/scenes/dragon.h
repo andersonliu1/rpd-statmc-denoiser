@@ -42,7 +42,7 @@ inline Scene make_dragon() {
     const float light_z_sn = 0.545f;
     const float light_len_x = 0.16f;
     const float light_len_y = 0.16f;
-    const Vec3f light_color(50.0f, 50.0f, 50.0f);
+    const Vec3f light_color(30.0f, 30.0f, 30.0f);
 
     auto to_scene = [](const Vec3f& v) {
         return Vec3f(v.x(), v.z(), -v.y());
@@ -68,7 +68,7 @@ inline Scene make_dragon() {
 
     PointLight accent_light;
     accent_light.position = to_scene(Vec3f(0.278f, -0.05f, 0.24f));
-    accent_light.intensity = Vec3f(0.3f, 0.3f, 0.36f);
+    accent_light.intensity = Vec3f(0.2f, 0.2f, 0.24f);
     scene.add_light(accent_light);
 
     // Back wall

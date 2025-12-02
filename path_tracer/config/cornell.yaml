@@ -13,3 +13,22 @@ focus_distance: 0.8
 samples_per_pixel: 32
 scene: cornell_box
 output: cornell  # saves to output/cornell unless an absolute path is provided
+tonemap: agx  # options: aces, agx, agx-golden, agx-punchy
+
+statmc_enabled: false
+rpf_tile_size: 8
+rpf_target_samples: -1  # -1 = auto
+rpf_max_radius: -1      # -1 = auto
+color_window_radius: 1        # Color window radius (pixels)
+color_normal_threshold: 0.95  # dot threshold for normal gating
+color_depth_threshold: 0.01   # relative depth threshold
+color_compat_sigma: 1.5       # Welch-style compatibility sigma
+color_shrinkage_k: 0.001      # shrinkage stabilizer
+var_window_radius: 1
+var_normal_threshold: 0.95
+var_depth_threshold: 0.01
+var_compat_sigma: 1.5
+var_shrinkage_k: 0.001
+var_iterations: 2
+adaptive_base_samples: 0
+adaptive_spp: 0

@@ -35,3 +35,8 @@ template <int N, typename T>
 inline Vec<N, T> clamp(const Vec<N, T>& v, const T min_val, const T max_val) {
     return v.cwiseMin(max_val).cwiseMax(min_val);
 }
+
+template<class T>
+inline T lerp(T a, T b, float t){
+    return a + (b - a) * t;
+}

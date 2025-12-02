@@ -51,10 +51,26 @@ Arguments:
 - `-c, --config`: Image + camera + sampling settings (YAML). May include `scene` and `output`.
 - `--scene`: Built-in scene to render (overrides YAML `scene` when supplied).
 - `-o, --output`: Output directory (absolute or relative to CWD). The renderer writes `<dir>/<leaf-name>.png`, where `leaf-name` is taken from the directory name. Overrides YAML `output` when supplied.
+- `--tonemap <preset>`: Tonemapping preset (`aces`, `agx`, `agx-golden`, `agx-punchy`). Overrides YAML `tonemap`.
+- `--statmc` / `--no-statmc`: Enable or disable StatMC/RPF rendering (overrides YAML `statmc.enabled`).
+- `--rpf-tile-size <N>`: RPF tile size (overrides YAML `statmc.rpf_tile_size`).
+- `--rpf-target-samples <N>`: Target pooled samples per tile for RPF (-1 = auto; overrides YAML `statmc.rpf_target_samples`).
+- `--rpf-max-radius <N>`: Max pooling radius in tiles (-1 = auto; overrides YAML `statmc.rpf_max_radius`).
 - `--seed`: Optional sampler RNG seed (defaults to random).
 - Additional CLI arguments follow the same precedence rules: CLI overrides YAML, YAML is the fallback.
 
 YAML `output` values are treated as relative names (e.g., `output: cornell` saves to `output/cornell/cornell.png`) unless you supply an absolute path. CLI `-o` values are used as given: absolute paths go there; relative paths are resolved against the current working directory.
+
+StatMC/RPF settings in YAML:
+
+```yaml
+tonemap: agx  # aces | agx | agx-golden | agx-punchy
+statmc:
+  enabled: false
+  rpf_tile_size: 8
+  rpf_target_samples: -1  # -1 = auto
+  rpf_max_radius: -1      # -1 = auto
+```
 
 
 ## Dependencies

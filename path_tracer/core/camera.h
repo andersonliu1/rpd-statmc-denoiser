@@ -63,11 +63,10 @@ struct Camera {
         lens_radius = 0.5f * aperture;
     }
 
-    Ray generate_ray(float u, float v) const {
+    Ray generate_ray(const float u, const float v, const Vec2f sample) const {
         Vec3f origin = position;
 
         if (lens_radius > 0.0f) {
-            Vec2f sample = Sampler::sample_disk();
             Vec2f lens_offset = lens_radius * sample;
             origin += lens_offset.x() * right_vector + lens_offset.y() * up_vector;
         }

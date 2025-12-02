@@ -20,8 +20,6 @@ struct Image {
 
     enum class ToneMapping : uint8_t { AGXDefault, AGXGolden, AGXPunchy, ACES };
 
-    static constexpr ToneMapping ToneMappingPreset = ToneMapping::AGXDefault; // Define Tonemapping Here
-
     Image() = default;
     Image(int w, int h) : width(w), height(h), pixels(w * h, Vec3f::Zero()) {}
 
@@ -44,7 +42,7 @@ struct Image {
     /// @brief AGX Tone Mapping: https://iolite-engine.com/blog_posts/minimal_agx_implementation
     /// @param value 
     /// @return 
-    Vec3f tone_map_Agx(const Vec3f& value) const {
+    Vec3f tone_map_Agx(const Vec3f& value, ToneMapping preset) const {
         auto mul_rows = [](const Vec3f& r0, const Vec3f& r1, const Vec3f& r2, const Vec3f& v) {
             return Vec3f(r0.dot(v), r1.dot(v), r2.dot(v));
         };
@@ -78,14 +76,21 @@ struct Image {
         Vec3f slope = Vec3f::Ones();
         Vec3f power = Vec3f::Ones();
         float saturation = 1.0f;
-        if constexpr (ToneMappingPreset == ToneMapping::AGXGolden) {
-            slope = Vec3f(1.0f, 0.9f, 0.5f);
-            power = Vec3f::Constant(0.8f);
-            saturation = 0.8f;
-        } else if constexpr (ToneMappingPreset == ToneMapping::AGXPunchy) {
-            slope = Vec3f::Ones();
-            power = Vec3f::Constant(1.35f);
-            saturation = 1.4f;
+        switch (preset) {
+            case ToneMapping::AGXGolden:
+                slope = Vec3f(1.0f, 0.9f, 0.5f);
+                power = Vec3f::Constant(0.8f);
+                saturation = 0.8f;
+                break;
+            case ToneMapping::AGXPunchy:
+                slope = Vec3f::Ones();
+                power = Vec3f::Constant(1.35f);
+                saturation = 1.4f;
+                break;
+            case ToneMapping::AGXDefault:
+            case ToneMapping::ACES:
+            default:
+                break;
         }
         Vec3f val = (col.cwiseProduct(slope)).array().pow(power.array()).matrix();
         const Vec3f lw(0.2126f, 0.7152f, 0.0722f);
@@ -119,13 +124,11 @@ struct Image {
         return stbi_write_png(filename.c_str(), width, height, 3, data.data(), sizeof(uint8_t) * 3 * width) != 0;
     }
 
-    bool save_with_tonemapping(const std::string &filename) const {
+    bool save_with_tonemapping(const std::string &filename, ToneMapping preset) const {
         std::vector<uint8_t> data(3 * width * height);
 
         for (int i = 0; i < width * height; ++i) {
-            Vec3f pixel = (ToneMappingPreset == ToneMapping::ACES)
-                              ? tone_map_Aces(pixels[i])
-                              : tone_map_Agx(pixels[i]);
+            Vec3f pixel = (preset == ToneMapping::ACES) ? tone_map_Aces(pixels[i]) : tone_map_Agx(pixels[i], preset);
             for (int j = 0; j < 3; j++) {
                 data[3 * i + j] = static_cast<unsigned char>(255.0f * std::max(0.0f, std::min(1.0f, pixel[j])));
             }

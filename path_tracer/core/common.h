@@ -38,8 +38,3 @@ inline Vec3f offset_ray_origin(const Vec3f& ray_pos, const Vec3f& normal) {
 inline float calc_luminance(const Vec3f& c) {
     return 0.2126f * c.x() + 0.7152f * c.y() + 0.0722f * c.z();
 }
-
-template<class T>
-inline T lerp(T a, T b, float t){
-    return a + (b - a) * t;
-}
