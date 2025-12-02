@@ -113,6 +113,16 @@ Build target `eval_tools` (or use `run.sh --target eval_tools`). Binary lives at
 ./build/shared/tools/eval_tools/eval_tools hdr-metrics ref.hdr test.hdr [residual.hdr]
 ```
 
+Helper script (builds `eval_tools` if needed and runs it):
+
+```bash
+# HDR compare
+./eval.sh compare-hdr -- output/foo_raw.hdr output/foo_denoised.hdr
+
+# HDR metrics with residual output
+./eval.sh hdr-metrics -- ref.hdr test.hdr residual.hdr
+```
+
 Standalone binaries `compare_hdr`, `compare_png`, and `hdr_metrics` are also built in the same folder.
 
 
