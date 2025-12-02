@@ -1,0 +1,12 @@
+raw: output/cornell/cornell_raw.hdr
+normal: output/cornell/cornell_normal.hdr
+albedo: output/cornell/cornell_albedo.hdr
+
+output: output/denoise
+
+iterations: 5
+
+sigma:
+  c: 0.5
+  n: 0.5
+  a: 0.1
