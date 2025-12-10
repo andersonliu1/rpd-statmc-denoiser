@@ -61,7 +61,7 @@ Arguments:
 - `--color-window-radius <N>`: Color window radius (pixels).
 - `--color-normal-thresh <T>`: Color normal dot threshold (0,1].
 - `--color-depth-thresh <T>`: Color relative depth threshold (>=0).
-- `--color-compat-sigma <T>`: Color compatibility sigma (>0).
+- `--color-compat-alpha <T>`: Color compatibility significance alpha (0,1).
 - `--color-shrinkage-k <T>`: Color shrinkage stabilizer (>0).
 - `--color-sigma-max <T>`: Max stddev clamp for color variance (>0).
 - `--var-window-radius <N>`: Variance-of-mean window radius (pixels).
@@ -90,14 +90,15 @@ rpf_max_radius: 1       # pooling radius in tiles (0 = no pooling)
 rpf_shrinkage_scale: 1.0       # k_eff = k * (1 + scale * f_rp)
 sensitivity_match_threshold: 0.0  # reject if |Δs_lens| > threshold; 0 disables
 color_window_radius: 1
-color_normal_threshold: 0.95
-color_depth_threshold: 0.01
-color_shrinkage_k: 0.001
+color_normal_threshold: 0.5
+color_depth_threshold: 0.25
+color_compat_alpha: 0.05
+color_shrinkage_k: 0.1
 color_sigma_max: 6.0
 var_window_radius: 1
-var_normal_threshold: 0.95
-var_depth_threshold: 0.01
-var_compat_sigma: 1.5
+var_normal_threshold: 0.5
+var_depth_threshold: 0.25
+var_compat_sigma: 30.0
 var_shrinkage_k: 0.001
 var_iterations: 2
 adaptive_base_samples: 0
