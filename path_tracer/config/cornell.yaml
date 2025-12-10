@@ -10,19 +10,18 @@ world_up: [0.0, 1.0, 0.0]
 focus_distance: 0.8
 
 # Rendering settings
-samples_per_pixel: 32
+samples_per_pixel: 10
 scene: cornell_box
 output: cornell  # saves to output/cornell unless an absolute path is provided
 tonemap: agx  # options: aces, agx, agx-golden, agx-punchy
 
-statmc_enabled: false
 statmc_enabled: true
 rpf_tile_size: 8
 rpf_target_samples: 256
 rpf_max_radius: 4
 rpf_shrinkage_scale: 0.0
 sensitivity_match_threshold: 0.2
-debug_statmc_outputs: false
+debug_statmc_outputs: true
 color_window_radius: 3
 color_normal_threshold: 0.6
 color_depth_threshold: 0.2

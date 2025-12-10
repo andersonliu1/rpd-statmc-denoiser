@@ -752,6 +752,25 @@ void statmc_denoise(const RenderConfig& config) {
         scalar_to_image(buffers.var_ratio_debug, w, h).save("debug_var_ratio.hdr");
         scalar_to_image(dbg_weight_sum, w, h).save("debug_weight_sum.hdr");
         scalar_to_image(dbg_neff, w, h).save("debug_neff.hdr");
+        // Tile sensitivity maps for each RP dimension and combined
+        auto expand_tiles = [&](const std::vector<float>& tiles) {
+            std::vector<float> out(w * h, 0.0f);
+            const auto& t = buffers.sensitivity_tiles;
+            if (t.tile_size <= 0 || t.tiles_x == 0 || t.tiles_y == 0 || tiles.empty()) return out;
+            for (int yy = 0; yy < h; ++yy) {
+                int ty = std::min(t.tiles_y - 1, yy / t.tile_size);
+                for (int xx = 0; xx < w; ++xx) {
+                    int tx = std::min(t.tiles_x - 1, xx / t.tile_size);
+                    at_2d(out, xx, yy, w) = at_2d(tiles, tx, ty, t.tiles_x);
+                }
+            }
+            return out;
+        };
+        scalar_to_image(expand_tiles(buffers.sensitivity_tiles.all), w, h).save("debug_sensitivity_all.hdr");
+        scalar_to_image(expand_tiles(buffers.sensitivity_tiles.brdf), w, h).save("debug_sensitivity_brdf.hdr");
+        scalar_to_image(expand_tiles(buffers.sensitivity_tiles.lens), w, h).save("debug_sensitivity_lens.hdr");
+        scalar_to_image(expand_tiles(buffers.sensitivity_tiles.light), w, h).save("debug_sensitivity_light.hdr");
+        scalar_to_image(expand_tiles(buffers.sensitivity_tiles.rr), w, h).save("debug_sensitivity_rr.hdr");
     }
 }
 

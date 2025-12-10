@@ -22,7 +22,7 @@ rpf_target_samples: 256  # -1 = MIN_SAMPLES fallback
 rpf_max_radius: 10      # pooling radius in tiles (0 = no pooling)
 rpf_shrinkage_scale: 0.0
 sensitivity_match_threshold: 0.2
-debug_statmc_outputs: false  # set true to dump StatMC debug HDRs
+debug_statmc_outputs: true  # set true to dump StatMC debug HDRs
 color_window_radius: 3
 color_normal_threshold: 0.6
 color_depth_threshold: 0.2
@@ -36,7 +36,7 @@ var_compat_sigma: 3.0
 var_shrinkage_k: 0.7
 var_iterations: 6
 # Adaptive sampling (only used when StatMC is enabled)
-adaptive_spp: 2             # Total extra samples (spp); override via --adaptive-spp
+adaptive_spp: 0             # Total extra samples (spp); override via --adaptive-spp
 adaptive_base_samples: 0    # Baseline extra samples per pixel
 adaptive_sigma_max: 6.0     # Clamp for variance used in adaptive importance
-adaptive_passes: 3          # Number of adaptive refinement passes
+adaptive_passes: 0          # Number of adaptive refinement passes

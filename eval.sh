@@ -73,11 +73,13 @@ done
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ "$SKIP_BUILD" == false ]]; then
-    BUILD_CMD=("${REPO_ROOT}/run.sh" "-t" "eval_tools" "-B" "$BUILD_DIR")
-    if [[ "$PARALLEL" == true ]]; then
-        BUILD_CMD+=("--parallel")
-    fi
-    "${BUILD_CMD[@]}"
+    for tgt in eval_tools tonemap_hdr; do
+        BUILD_CMD=("${REPO_ROOT}/run.sh" "-t" "$tgt" "-B" "$BUILD_DIR")
+        if [[ "$PARALLEL" == true ]]; then
+            BUILD_CMD+=("--parallel")
+        fi
+        "${BUILD_CMD[@]}"
+    done
 fi
 
 # CMake places binaries under build/<dir>/shared/tools by default.
