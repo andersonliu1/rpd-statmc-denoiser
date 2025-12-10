@@ -1,6 +1,6 @@
 # Image settings
-image_width: 256
-image_height: 256
+image_width: 1024
+image_height: 1024
 
 # Camera settings
 fov: 38.6
@@ -16,21 +16,26 @@ output: cornell  # saves to output/cornell unless an absolute path is provided
 tonemap: agx  # options: aces, agx, agx-golden, agx-punchy
 
 statmc_enabled: false
+statmc_enabled: true
 rpf_tile_size: 8
-rpf_target_samples: -1  # -1 = auto
-rpf_max_radius: -1      # -1 = auto
-color_window_radius: 1        # Color window radius (pixels)
-color_normal_threshold: 0.95  # dot threshold for normal gating
-color_depth_threshold: 0.01   # relative depth threshold
-color_compat_sigma: 1.5       # Welch-style compatibility sigma
-color_shrinkage_k: 0.001      # shrinkage stabilizer
-var_window_radius: 1
-var_normal_threshold: 0.95
-var_depth_threshold: 0.01
-var_compat_sigma: 1.5
-var_shrinkage_k: 0.001
-var_iterations: 2
+rpf_target_samples: 256
+rpf_max_radius: 4
+rpf_shrinkage_scale: 0.0
+sensitivity_match_threshold: 0.2
+debug_statmc_outputs: false
+color_window_radius: 3
+color_normal_threshold: 0.6
+color_depth_threshold: 0.2
+color_compat_alpha: 0.01
+color_shrinkage_k: 0.1
+color_sigma_max: 4.0
+var_window_radius: 3
+var_normal_threshold: 0.6
+var_depth_threshold: 0.25
+var_compat_sigma: 3.0
+var_shrinkage_k: 0.7
+var_iterations: 6
+adaptive_spp: 2
 adaptive_base_samples: 0
-adaptive_spp: 0
-adaptive_sigma_max: 3.0
-adaptive_passes: 1
+adaptive_sigma_max: 4.0
+adaptive_passes: 3

@@ -6,10 +6,24 @@
 struct Sampler {
     inline thread_local static std::mt19937 rng;
     inline thread_local static std::uniform_real_distribution<float> dist;
+    inline thread_local static bool initialized = false;
 
     static void init(uint32_t seed) {
         rng = std::mt19937(seed);
         dist = std::uniform_real_distribution<float>(0.0f, 1.0f);
+        initialized = true;
+    }
+
+    static void init_thread(uint32_t seed) {
+        rng = std::mt19937(seed);
+        dist = std::uniform_real_distribution<float>(0.0f, 1.0f);
+        initialized = true;
+    }
+
+    static void ensure_thread_seed(uint32_t base_seed, uint32_t thread_id) {
+        if (!initialized) {
+            init_thread(base_seed ^ (0x9e3779b9u + thread_id * 0x85ebca6bu));
+        }
     }
 
     static float next1d() {

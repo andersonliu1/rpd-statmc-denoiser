@@ -1,0 +1,19 @@
+# Each non-comment line: label|args
+# "label" is used for output subdirectory; "args" are passed after -c/-o.
+# You can include any trace.sh flags here (e.g., --seed 12345).
+# Edit this file to define your batch.
+
+reference        | --no-statmc --spp 256 --seed 99999
+uniform          | --no-statmc --spp 16 --seed 14
+statmc_8x1x8     | --statmc --spp 8  --adaptive-passes 1 --adaptive-spp 8 --seed 14
+statmc_4x1x12    | --statmc --spp 4  --adaptive-passes 1 --adaptive-spp 12 --seed 14
+statmc_2x1x14    | --statmc --spp 2 --adaptive-passes 1 --adaptive-spp 14 --seed 14
+statmc_8x2x4     | --statmc --spp 8  --adaptive-passes 2 --adaptive-spp 4 --seed 14
+statmc_6x2x5     | --statmc --spp 6  --adaptive-passes 2 --adaptive-spp 5 --seed 14
+statmc_4x2x6     | --statmc --spp 4 --adaptive-passes 2 --adaptive-spp 6 --seed 14
+statmc_7x3x3     | --statmc --spp 7  --adaptive-passes 3 --adaptive-spp 3 --seed 14
+statmc_4x3x4     | --statmc --spp 4  --adaptive-passes 3 --adaptive-spp 4 --seed 14
+statmc_14x1x2    | --statmc --spp 14  --adaptive-passes 1 --adaptive-spp 2 --seed 14
+statmc_12x2x2    | --statmc --spp 12  --adaptive-passes 2 --adaptive-spp 2 --seed 14
+statmc_10x3x2    | --statmc --spp 10 --adaptive-passes 3 --adaptive-spp 2 --seed 14
+statmc_8x4x2     | --statmc --spp 8  --adaptive-passes 4 --adaptive-spp 2 --seed 14

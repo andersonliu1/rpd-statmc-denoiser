@@ -55,7 +55,25 @@ Arguments:
 - `--statmc` / `--no-statmc`: Enable or disable StatMC/RPF rendering (overrides YAML `statmc.enabled`).
 - `--rpf-tile-size <N>`: RPF tile size (overrides YAML `statmc.rpf_tile_size`).
 - `--rpf-target-samples <N>`: Target pooled samples per tile for RPF (-1 = auto; overrides YAML `statmc.rpf_target_samples`).
-- `--rpf-max-radius <N>`: Max pooling radius in tiles (-1 = auto; overrides YAML `statmc.rpf_max_radius`).
+- `--rpf-max-radius <N>`: Max pooling radius in tiles (overrides YAML `statmc.rpf_max_radius`).
+- `--rpf-shrinkage-scale <T>`: Scale for shrinkage based on RP sensitivity (`k_eff = k * (1 + scale * f_rp)`).
+- `--sensitivity-match-thresh <T>`: Reject neighbors when |Δs_lens| exceeds this (0 disables).
+- `--color-window-radius <N>`: Color window radius (pixels).
+- `--color-normal-thresh <T>`: Color normal dot threshold (0,1].
+- `--color-depth-thresh <T>`: Color relative depth threshold (>=0).
+- `--color-compat-sigma <T>`: Color compatibility sigma (>0).
+- `--color-shrinkage-k <T>`: Color shrinkage stabilizer (>0).
+- `--color-sigma-max <T>`: Max stddev clamp for color variance (>0).
+- `--var-window-radius <N>`: Variance-of-mean window radius (pixels).
+- `--var-normal-thresh <T>`: Variance-of-mean normal dot threshold (0,1].
+- `--var-depth-thresh <T>`: Variance-of-mean relative depth threshold (>=0).
+- `--var-compat-sigma <T>`: Variance-of-mean compatibility sigma (>0).
+- `--var-shrinkage-k <T>`: Variance-of-mean shrinkage stabilizer (>0).
+- `--var-iterations <N>`: Variance-of-mean smoothing iterations.
+- `--adaptive-base-samples <N>`: Baseline extra samples per pixel for adaptive refinement.
+- `--adaptive-spp <N>`: Total extra samples (spp) for adaptive refinement.
+- `--adaptive-sigma-max <T>`: Max sigma clamp for adaptive importance (>0).
+- `--adaptive-passes <N>`: Number of adaptive refinement passes.
 - `--seed`: Optional sampler RNG seed (defaults to random).
 - Additional CLI arguments follow the same precedence rules: CLI overrides YAML, YAML is the fallback.
 
@@ -67,13 +85,15 @@ StatMC/RPF/adaptive settings in YAML (flat keys):
 tonemap: agx  # aces | agx | agx-golden | agx-punchy
 statmc_enabled: false
 rpf_tile_size: 8
-rpf_target_samples: -1  # -1 = auto
-rpf_max_radius: -1      # -1 = auto
+rpf_target_samples: -1  # -1 = MIN_SAMPLES fallback
+rpf_max_radius: 1       # pooling radius in tiles (0 = no pooling)
+rpf_shrinkage_scale: 1.0       # k_eff = k * (1 + scale * f_rp)
+sensitivity_match_threshold: 0.0  # reject if |Δs_lens| > threshold; 0 disables
 color_window_radius: 1
 color_normal_threshold: 0.95
 color_depth_threshold: 0.01
-color_compat_sigma: 1.5
 color_shrinkage_k: 0.001
+color_sigma_max: 6.0
 var_window_radius: 1
 var_normal_threshold: 0.95
 var_depth_threshold: 0.01

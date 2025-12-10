@@ -12,9 +12,6 @@ struct PixelStats {
         return (n > 1) ? square_diff / float(n - 1) : 0.0f;
     }
 
-    float variance_of_mean() const {
-        return (n > 0) ? variance() / float(n) : 0.0f;
-    }
 };
 
 static void accumulate_sample(PixelStats& s, const Vec3f& luminance) {
@@ -28,17 +25,11 @@ static void accumulate_sample(PixelStats& s, const Vec3f& luminance) {
     s.color_mean += color_delta / float(s.n);
 }
 
-inline float compute_corr(const float sumX, const float sumY, const float sumXY, const float sumX2, const float sumY2, const int n) {
-    if (n < 2) return 0.0f;
-    float var_x = n * sumX2 - sumX * sumX;
-    float var_y = n * sumY2 - sumY * sumY;
-    float num = n * sumXY - sumX * sumY;
-    float denom = sqrt(std::max(0.0f, var_x * var_y));
-    if (denom <= EPS_SMALL) return 0.0f;
-    return num / denom;
-}
-
 namespace rpf {
+
+    static constexpr float BRDF_ALBEDO_GAIN = 0.3f;
+    static constexpr float BASE_ALBEDO_THRESH = 0.12f;
+    static constexpr float LIGHT_TTEST_GAIN = 0.5f;
 
     struct Corr1D {
         float sum_x = 0.0f;
@@ -57,9 +48,17 @@ namespace rpf {
             sum_y2 += y * y;
         }
 
-        float compute_sensitivity() const {
-            float r = compute_corr(sum_x, sum_y, sum_xy, sum_x2, sum_y2, n);
-            return r * r;
+        float compute_cov_sensitivity() const {
+            if (n < 2) return 0.0f;
+            const float inv_n = 1.0f / float(n);
+            const float mean_x = sum_x * inv_n;
+            const float mean_y = sum_y * inv_n;
+            const float cov = sum_xy * inv_n - mean_x * mean_y;
+            const float var_y = sum_y2 * inv_n - mean_y * mean_y;
+            const float var_x = sum_x2 * inv_n - mean_x * mean_x;
+            if (var_y <= EPS_SMALL || var_x <= EPS_SMALL) return 0.0f;
+            const float denom = std::sqrt(var_x * var_y) + EPS_SMALL;
+            return std::clamp(std::abs(cov) / denom, 0.0f, 1.0f);
         }
 
         void reset() {
@@ -97,9 +96,9 @@ namespace rpf {
                 sum_y2 += y * y;
             }
 
-            /// @brief PCA-based sensitivity
-            /// @return 
-            float compute_sensitivity() const {
+            /// @brief PCA-based sensitivity using covariance magnitude normalized like a correlation (cov / sqrt(var_y * var_r))
+            /// @return Sensitivity in [0,1]
+            float compute_cov_sensitivity() const {
                 if (n < 2) return 0.0f;
 
                 const float s11 = n * sum_x12 - sum_x1 * sum_x1;
@@ -128,8 +127,19 @@ namespace rpf {
                 const float proj_sum = axis.x() * sum_x1 + axis.y() * sum_x2;
                 const float proj_sum2 = axis.x() * axis.x() * sum_x12 + 2.0f * axis.x() * axis.y() * sum_x1x2 + axis.y() * axis.y() * sum_x22;
                 const float proj_sum_y = axis.x() * sum_x1y + axis.y() * sum_x2y;
-                const float r = compute_corr(proj_sum, sum_y, proj_sum_y, proj_sum2, sum_y2, n);
-                return r * r;
+                const float inv_n = 1.0f / float(n);
+                const float mean_r = proj_sum * inv_n;
+                const float mean_y = sum_y * inv_n;
+                const float cov = proj_sum_y * inv_n - mean_r * mean_y;
+                const float var_y = sum_y2 * inv_n - mean_y * mean_y;
+                if (var_y <= EPS_SMALL) return 0.0f;
+
+                // Projected variance of RNG along dominant axis
+                const float var_r = proj_sum2 * inv_n - mean_r * mean_r;
+                if (var_r <= EPS_SMALL) return 0.0f;
+
+                const float denom = std::sqrt(var_y * var_r) + EPS_SMALL;
+                return std::clamp(std::abs(cov) / denom, 0.0f, 1.0f);
             }
 
         void reset() {
@@ -167,13 +177,23 @@ namespace rpf {
             rr.reset();
         }
 
-        float computeTileSensitivity() const {
-            float s_brdf = brdf.compute_sensitivity();
-            float s_lens = lens.compute_sensitivity();
-            float s_light = light.compute_sensitivity();
-            float s_rr = rr.compute_sensitivity();
-            float product = (1.0f - s_brdf) * (1.0f - s_lens) * (1.0f - s_light) * (1.0f - s_rr);
-            return 1.0f - product;
+        struct SplitSensitivity {
+            float brdf = 0.0f;
+            float lens = 0.0f;
+            float light = 0.0f;
+            float rr = 0.0f;
+            float combined = 0.0f;
+        };
+
+        SplitSensitivity computeSplitSensitivity() const {
+            SplitSensitivity s;
+            s.brdf = brdf.compute_cov_sensitivity();
+            s.lens = lens.compute_cov_sensitivity();
+            s.light = light.compute_cov_sensitivity();
+            s.rr = rr.compute_cov_sensitivity();
+            const float product = (1.0f - s.brdf) * (1.0f - s.lens) * (1.0f - s.light) * (1.0f - s.rr);
+            s.combined = 1.0f - product;
+            return s;
         }
     };
 
@@ -184,7 +204,6 @@ namespace rpf {
         std::vector<Tile> tiles;
 
         static constexpr int MIN_SAMPLES = 32;
-        static constexpr int MAX_RADIUS = 4;
 
         void init(int w, int h, int size) {
             tile_size = size;

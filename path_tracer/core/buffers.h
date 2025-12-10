@@ -14,10 +14,57 @@ struct FrameBuffers {
     Image albedo;
     Image normal;
     Image world_pos;
-    std::vector<float> sensitivity;
+    struct SensitivityTiles {
+        int tile_size = 1;
+        int tiles_x = 0;
+        int tiles_y = 0;
+        std::vector<float> all;
+        std::vector<float> brdf;
+        std::vector<float> lens;
+        std::vector<float> light;
+        std::vector<float> rr;
+
+        void init(int width, int height, int tsize) {
+            tile_size = tsize;
+            tiles_x = (tile_size > 0) ? (width + tile_size - 1) / tile_size : 0;
+            tiles_y = (tile_size > 0) ? (height + tile_size - 1) / tile_size : 0;
+            const int size = tiles_x * tiles_y;
+            all.assign(size, 0.0f);
+            brdf.assign(size, 0.0f);
+            lens.assign(size, 0.0f);
+            light.assign(size, 0.0f);
+            rr.assign(size, 0.0f);
+        }
+
+        float lookup(const std::vector<float>& tiles, int idx, int width) const {
+            if (tile_size <= 0 || tiles.empty() || tiles_x == 0 || tiles_y == 0) return 0.0f;
+            int y = idx / width;
+            int x = idx - y * width;
+            int tx = std::min(tiles_x - 1, x / tile_size);
+            int ty = std::min(tiles_y - 1, y / tile_size);
+            return at_2d(tiles, tx, ty, tiles_x);
+        }
+
+        std::vector<float> expand(int width, int height) const {
+            std::vector<float> out(width * height, 0.0f);
+            if (tile_size <= 0 || tiles_x == 0 || tiles_y == 0 || all.empty()) return out;
+            for (int y = 0; y < height; ++y) {
+                int ty = std::min(tiles_y - 1, y / tile_size);
+                for (int x = 0; x < width; ++x) {
+                    int tx = std::min(tiles_x - 1, x / tile_size);
+                    at_2d(out, x, y, width) = at_2d(all, tx, ty, tiles_x);
+                }
+            }
+            return out;
+        }
+    } sensitivity_tiles;
     Image denoised;
     std::vector<float> uncertainty;
+    std::vector<float> alpha;
     std::vector<float> var_mean_denoised;
+    std::vector<float> var_total_debug;
+    std::vector<float> var_eff_debug;
+    std::vector<float> var_ratio_debug;
     std::vector<float> depth;
     std::vector<int> hit_count;
     std::vector<int> sample_count;
@@ -27,13 +74,25 @@ struct FrameBuffers {
         albedo = Image(w, h);
         normal = Image(w, h);
         world_pos = Image(w,h);
-        sensitivity.assign(w * h, 0.0f);
         denoised = Image(w, h);
         uncertainty.assign(w * h, 0.0f);
+        alpha.assign(w * h, 0.0f);
         var_mean_denoised.assign(w * h, 0.0f);
+        var_total_debug.assign(w * h, 0.0f);
+        var_eff_debug.assign(w * h, 0.0f);
+        var_ratio_debug.assign(w * h, 0.0f);
         depth.assign(w * h, 0.0f);
         hit_count.assign(w * h, 0);
         sample_count.assign(w * h, 0);
+    }
+
+    void init_sensitivity(int tile_size) {
+        if (tile_size <= 0 || radiance.width <= 0 || radiance.height <= 0) return;
+        const int tiles_x = (radiance.width + tile_size - 1) / tile_size;
+        const int tiles_y = (radiance.height + tile_size - 1) / tile_size;
+        const int size = tiles_x * tiles_y;
+        if (tile_size == sensitivity_tiles.tile_size && size == static_cast<int>(sensitivity_tiles.all.size()) && !sensitivity_tiles.all.empty()) return;
+        sensitivity_tiles.init(radiance.width, radiance.height, tile_size);
     }
 
     void finalize() {
@@ -99,8 +158,9 @@ inline bool output_buffers(const FrameBuffers& fb, const std::string& directory,
     ok &= save_image_if_valid(fb.radiance, ".hdr");
 
     if (statmc) {
-        ok &= save_scalar_buffer(fb.sensitivity, "_sensitivity.hdr");
+        ok &= save_scalar_buffer(fb.sensitivity_tiles.expand(fb.radiance.width, fb.radiance.height), "_sensitivity.hdr");
         ok &= save_scalar_buffer(fb.uncertainty, "_uncertainty.hdr");
+        ok &= save_scalar_buffer(fb.alpha, "_alpha.hdr");
         ok &= save_scalar_buffer(fb.var_mean_denoised, "_vardenoised.hdr");
     }
 
@@ -108,6 +168,10 @@ inline bool output_buffers(const FrameBuffers& fb, const std::string& directory,
     ok &= save_image_if_valid(fb.normal, "_normal.hdr");
     ok &= save_image_if_valid(fb.world_pos, "_worldpos.hdr");
     ok &= save_scalar_buffer(fb.depth, "_depth.hdr");
+    // Debug-only: total/effective variance and ratio; remove when not needed
+    ok &= save_scalar_buffer(fb.var_total_debug, "_var_total.hdr");
+    ok &= save_scalar_buffer(fb.var_eff_debug, "_var_eff.hdr");
+    ok &= save_scalar_buffer(fb.var_ratio_debug, "_var_ratio.hdr");
 
     return ok;
 }
