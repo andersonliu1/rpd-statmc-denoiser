@@ -1,6 +1,4 @@
-# MC Denoise
-
-Monte Carlo path tracing with denoising for CSCI 580.
+# Random Parameter Decomposition for Statistics-Based Monte Carlo Denoising
 
 ## Setup
 
