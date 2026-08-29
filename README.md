@@ -1,5 +1,5 @@
 # Random Parameter Decomposition for Statistics-Based Monte Carlo Denoising
-
+![Imgur](https://i.imgur.com/dMKWZ8M.png)
 ## Setup
 
 ```bash
@@ -25,6 +25,12 @@ git submodule update --init --recursive
 ./run.sh clean --target path_tracer
 ```
 
+Run the repository test suite:
+
+```bash
+./run.sh test --parallel
+```
+
 When another target (e.g., a denoiser) lands in the tree, use `./run.sh --target <name>`
 to build or clean it without touching the others.
 
@@ -34,33 +40,29 @@ to build or clean it without touching the others.
 # From the repo root after building
 ./build/path_tracer_build/path_tracer/path_tracer \
     -c path_tracer/config/cornell.yaml \
-    --scene cornell_box \
     -o ./output/cornell \
     --seed 1234
 
 # or use the helper script to build (optional) and run (parallel build by default):
-./trace.sh -- -c path_tracer/config/test.yaml -o ./output/cornell
+./trace.sh -- -c path_tracer/config/cornell.yaml -o ./output/cornell
 
 # Skip the build step if you already built:
-./trace.sh --no-build -- -c path_tracer/config/test.yaml -s cornell_box
+./trace.sh --no-build -- -c path_tracer/config/cornell.yaml -o ./output/cornell
 ```
 
 Arguments:
 - `-c, --config`: Image + camera + sampling settings (YAML). May include `scene` and `output`.
 - `--scene`: Built-in scene to render (overrides YAML `scene` when supplied).
-- `-o, --output`: Output directory (absolute or relative to CWD). The renderer writes `<dir>/<leaf-name>.png`, where `leaf-name` is taken from the directory name. Overrides YAML `output` when supplied.
+- `-o, --output`: Output directory (absolute or relative to CWD). The renderer clears the directory first, then writes `<dir>/<leaf-name>.png`, `<dir>/<leaf-name>.hdr`, and the auxiliary outputs described below. Overrides YAML `output` when supplied.
 - `--tonemap <preset>`: Tonemapping preset (`aces`, `agx`, `agx-golden`, `agx-punchy`). Overrides YAML `tonemap`.
-- `--statmc` / `--no-statmc`: Enable or disable StatMC/RPF rendering (overrides YAML `statmc.enabled`).
-- `--rpf-tile-size <N>`: RPF tile size (overrides YAML `statmc.rpf_tile_size`).
-- `--rpf-target-samples <N>`: Target pooled samples per tile for RPF (-1 = auto; overrides YAML `statmc.rpf_target_samples`).
-- `--rpf-max-radius <N>`: Max pooling radius in tiles (overrides YAML `statmc.rpf_max_radius`).
-- `--rpf-shrinkage-scale <T>`: Scale for shrinkage based on RP sensitivity (`k_eff = k * (1 + scale * f_rp)`).
-- `--sensitivity-match-thresh <T>`: Reject neighbors when |Δs_lens| exceeds this (0 disables).
+- `--statmc` / `--no-statmc`: Enable or disable StatMC/RPF rendering (overrides YAML `statmc_enabled`).
+- `--rpf-tile-size <N>`: Sensitivity support size for the overlapping RPF grid.
+- `--rpf-shrinkage-scale <T>`: Scale RP-based feature gating; zero is a true RPD-off ablation.
+- `--rpf-confidence-samples <T>`: Confidence sample mass for sensitivity shrinkage (>0).
 - `--color-window-radius <N>`: Color window radius (pixels).
 - `--color-normal-thresh <T>`: Color normal dot threshold (0,1].
 - `--color-depth-thresh <T>`: Color relative depth threshold (>=0).
 - `--color-compat-alpha <T>`: Color compatibility significance alpha (0,1).
-- `--color-shrinkage-k <T>`: Color shrinkage stabilizer (>0).
 - `--color-sigma-max <T>`: Max stddev clamp for color variance (>0).
 - `--var-window-radius <N>`: Variance-of-mean window radius (pixels).
 - `--var-normal-thresh <T>`: Variance-of-mean normal dot threshold (0,1].
@@ -68,42 +70,110 @@ Arguments:
 - `--var-compat-sigma <T>`: Variance-of-mean compatibility sigma (>0).
 - `--var-shrinkage-k <T>`: Variance-of-mean shrinkage stabilizer (>0).
 - `--var-iterations <N>`: Variance-of-mean smoothing iterations.
-- `--adaptive-base-samples <N>`: Baseline extra samples per pixel for adaptive refinement.
-- `--adaptive-spp <N>`: Total extra samples (spp) for adaptive refinement.
+- `--adaptive-base-samples <N>`: Minimum extra samples per pixel per adaptive pass, taken from the `adaptive_spp` budget.
+- `--adaptive-spp <N>`: Extra samples (spp) allocated by each adaptive pass.
 - `--adaptive-sigma-max <T>`: Max sigma clamp for adaptive importance (>0).
 - `--adaptive-passes <N>`: Number of adaptive refinement passes.
+- `--adaptive-importance-radius <N>`: Edge-aware smoothing radius for adaptive importance (>=0).
 - `--seed`: Optional sampler RNG seed (defaults to random).
 - Additional CLI arguments follow the same precedence rules: CLI overrides YAML, YAML is the fallback.
 
-YAML `output` values are treated as relative names (e.g., `output: cornell` saves to `output/cornell/cornell.png`) unless you supply an absolute path. CLI `-o` values are used as given: absolute paths go there; relative paths are resolved against the current working directory.
+YAML `output` values are treated as relative names by default. For example, `output: cornell` resolves to `output/cornell/` and produces `output/cornell/cornell.png`. CLI `-o` values are used as given: absolute paths go there; relative paths are resolved against the current working directory. The output directory must include a leaf name because that leaf name is used as the base filename.
 
-StatMC/RPF/adaptive settings in YAML (flat keys):
+YAML keys are flat. Unknown keys fail fast, and omitted optional keys use the
+defaults in `path_tracer/core/config.h`. A minimal StatMC configuration only
+needs to override values that differ from those defaults:
 
 ```yaml
-tonemap: agx  # aces | agx | agx-golden | agx-punchy
-statmc_enabled: false
-rpf_tile_size: 8
-rpf_target_samples: -1  # -1 = MIN_SAMPLES fallback
-rpf_max_radius: 1       # pooling radius in tiles (0 = no pooling)
-rpf_shrinkage_scale: 1.0       # k_eff = k * (1 + scale * f_rp)
-sensitivity_match_threshold: 0.0  # reject if |Δs_lens| > threshold; 0 disables
-color_window_radius: 1
-color_normal_threshold: 0.5
-color_depth_threshold: 0.25
-color_compat_alpha: 0.05
-color_shrinkage_k: 0.1
-color_sigma_max: 6.0
-var_window_radius: 1
-var_normal_threshold: 0.5
-var_depth_threshold: 0.25
-var_compat_sigma: 30.0
-var_shrinkage_k: 0.001
-var_iterations: 2
-adaptive_base_samples: 0
-adaptive_spp: 0
-adaptive_sigma_max: 3.0
-adaptive_passes: 1
+image_width: 1024
+image_height: 1024
+samples_per_pixel: 4
+scene: cornell_box
+output: cornell
+fov: 38.6
+camera_position: [0.278, 0.2744, -0.8]
+camera_direction: [0.0, 0.0, 1.0]
+statmc_enabled: true
+adaptive_spp: 4
+adaptive_passes: 3
 ```
+
+Current StatMC/RPF implementation notes:
+- Random-parameter dependency diagnostics are accumulated on an overlapping low-resolution grid and reconstructed per pixel with bilinear interpolation.
+- Recorded random inputs stay in their canonical `[0,1]` sampling domain and use the first valid occurrence. They include active lens samples, non-delta BRDF samples, categorical light selection, light UV, nonzero-environment direction, binary visibility, and binary Russian-roulette survival. Node-local full raster sample position is recorded separately as the screen-space comparator.
+- Radiance dependency uses a bias-adjusted 4x4 binned explained-variance score. Binary visibility uses bias-corrected binned mutual information. Weighted estimates and confidence use effective sample mass.
+- Every recorded dimension is compared against full-path sample luminance. Random sensitivity is normalized against screen-position sensitivity, matching RPF's distinction between stochastic variation and image detail. These values are nonlinear dependency diagnostics, not additive variance contributions or direct estimates of converged pixel error.
+- Color denoising uses per-channel square-root-domain Welch statistics, soft compatibility weights, and a conservative variance floor. Reliable light dependency adds a soft beta-binomial visibility-compatibility weight, while RPD never reduces the variance estimate.
+- Adaptive sampling uses `max(raw, denoised)` variance-of-mean, a budget-preserving per-pixel minimum allocation, and `sqrt(variance)`-scaled importance with edge-aware smoothing.
+- Pixel/sample-derived RNG seeds make renders independent of OpenMP row scheduling.
+- Render-time RPF accumulation is thread-local and merged by grid node in parallel after each sampling phase.
+- The renderer logs per-stage timings for `recompute_sensitivity`, `statmc_denoise`, `var_mean_denoise`, `compute_adaptive_sample_counts`, and `render_image_adaptive`.
+
+StatMC outputs:
+- Always written for every render:
+  `<leaf>.png`, `<leaf>.hdr`, `<leaf>_albedo.hdr`, `<leaf>_normal.hdr`, `<leaf>_worldpos.hdr`, `<leaf>_depth.hdr`.
+- Written when `statmc_enabled: true` or `--statmc` is active:
+  `*_sensitivity.hdr`, per-dimension `*_sensitivity_{pixel,brdf,lens,light,environment,rr}.hdr`, `*_sensitivity_confidence.hdr`, `*_sensitivity_gradient.hdr`, `*_light_visibility.hdr`, `*_uncertainty.hdr`, `*_alpha.hdr`, `*_vardenoised.hdr`, `*_adaptive_importance.hdr`, and `*_sample_fraction.hdr`.
+  This also includes `*_var_total.hdr`, `*_var_eff.hdr`, and `*_var_ratio.hdr`.
+- If `debug_statmc_outputs: true`, extra debug HDRs are written into the current working directory:
+  `debug_neighbors.hdr`, `debug_alpha.hdr`, `debug_var_total.hdr`, `debug_var_eff.hdr`, `debug_var_ratio.hdr`, `debug_weight_sum.hdr`, `debug_neff.hdr`, `debug_sensitivity_all.hdr`, `debug_sensitivity_pixel.hdr`, `debug_sensitivity_brdf.hdr`, `debug_sensitivity_lens.hdr`, `debug_sensitivity_light.hdr`, `debug_sensitivity_environment.hdr`, `debug_sensitivity_rr.hdr`, `debug_sensitivity_confidence.hdr`, `debug_sensitivity_gradient.hdr`, `debug_reliability_sampling.hdr`, `debug_reliability_denoise.hdr`, `debug_variance_source_adaptive.hdr`, `debug_adaptive_extra_counts.hdr`.
+
+Timing sweep helper:
+
+```bash
+scripts/benchmark_pass_timing.sh \
+  --config path_tracer/config/cornell.yaml \
+  --output-base output/timing_cornell \
+  --spp 2,4,8 \
+  --adaptive-passes 0,1,2 \
+  --adaptive-spp 2 \
+  --extra-args "--seed 1234"
+```
+
+This helper prints CSV rows with wall time and summed stage timings for render, post-pass denoising/sensitivity work, and adaptive rendering.
+
+### Reproducible paper evaluation
+
+Use `paper_eval.sh` to render one scene's paired seed matrix for uniform sampling,
+corrected StatMC with RPD disabled, and corrected StatMC with RPD enabled. It writes
+linear HDR RMSE/NRMSE, local log-luminance SSIM, log-gradient NRMSE, PNG metrics,
+wall times, paired 95% confidence intervals, an independent-reference noise check,
+residuals, ready-named paper images, the source config, and the Git revision.
+
+```bash
+scripts/paper_eval.sh \
+  --config path_tracer/config/cornell.yaml \
+  --output-root output/paper_eval/cornell \
+  --uniform-spp 16 \
+  --reference-spp 512
+```
+
+Ensure the configuration's total adaptive budget equals `--uniform-spp`; for the
+default Cornell configuration, $4 + 3\times4 = 16$ spp. Use a fresh output root:
+the renderer replaces each method/seed directory.
+
+`paper_suite.sh` calls that single-scene worker for the predefined Cornell, Bunny
+DOF, and Dragon benchmark, then aggregates their metrics:
+
+```bash
+./scripts/paper_suite.sh
+```
+
+Combined CSVs are written under `output/paper_eval/final/`. Validate the workflow
+quickly with `./scripts/paper_suite.sh --smoke`; smoke outputs stay under
+`output/paper_eval/smoke/`.
+
+Recompute metrics from an existing full suite without rendering again:
+
+```bash
+./scripts/paper_suite.sh --rescore
+```
+
+Rescoring compares every candidate to both independent references, combines the
+reference pair within each seed, and only then computes paired seed confidence
+intervals. HDR/PNG errors are combined in squared-error space. The main outputs
+are `all_rescore_summary.csv`, `all_rescore_paired_summary.csv`,
+`all_rescore_reference_noise.csv`, and `all_rescore_invalid.csv`.
 
 ### Denoisers
 
@@ -127,9 +197,10 @@ Options: `-B/--build-dir` to choose a build dir (default `build`), `--parallel/-
 Build target `eval_tools` (or use `run.sh --target eval_tools`). Binary lives at `build/shared/tools/eval_tools`. Subcommands:
 
 ```bash
-./build/shared/tools/eval_tools/eval_tools compare-hdr a.hdr b.hdr
+./build/shared/tools/eval_tools/eval_tools compare-hdr reference.hdr test.hdr
 ./build/shared/tools/eval_tools/eval_tools compare-png a.png b.png
 ./build/shared/tools/eval_tools/eval_tools hdr-metrics ref.hdr test.hdr [residual.hdr]
+./build/shared/tools/eval_tools/eval_tools self-test
 ```
 
 Helper script (builds `eval_tools` if needed and runs it):
