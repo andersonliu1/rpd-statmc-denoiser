@@ -5,7 +5,7 @@
 
 int main(int argc, char** argv) {
     if (argc != 3) {
-        std::fprintf(stderr, "Usage: %s a.hdr b.hdr\n", argv[0]);
+        std::fprintf(stderr, "Usage: %s reference.hdr test.hdr\n", argv[0]);
         return 1;
     }
     int w1, h1, c1;
@@ -40,7 +40,7 @@ int main(int argc, char** argv) {
             sum_abs[c] += diff;
             if (diff > max_abs[c]) max_abs[c] = diff;
             sum_sq += diff * diff;
-            peak = std::max(peak, std::max(a, b));
+            peak = std::max(peak, std::abs(a));
         }
         const double lw_r = 0.2126;
         const double lw_g = 0.7152;
@@ -49,7 +49,7 @@ int main(int argc, char** argv) {
         double lum_b = lw_r * d2[3 * i] + lw_g * d2[3 * i + 1] + lw_b * d2[3 * i + 2];
         double lum_diff = lum_a - lum_b;
         sum_sq_lum += lum_diff * lum_diff;
-        peak_lum = std::max(peak_lum, std::max(lum_a, lum_b));
+        peak_lum = std::max(peak_lum, std::abs(lum_a));
     }
     stbi_image_free(d1);
     stbi_image_free(d2);
@@ -66,7 +66,7 @@ int main(int argc, char** argv) {
 
     std::printf("Mean abs diff per channel: R=%.6g G=%.6g B=%.6g\n", mean_abs[0], mean_abs[1], mean_abs[2]);
     std::printf("Max abs diff per channel:  R=%.6g G=%.6g B=%.6g\n", max_abs[0], max_abs[1], max_abs[2]);
-    std::printf("RMSE: %.6g  PSNR (peak=%.6g): %.2f dB\n", rmse, peak, psnr);
-    std::printf("RMSE (luminance): %.6g  PSNR_luma (peak=%.6g): %.2f dB\n", rmse_lum, peak_lum, psnr_lum);
+    std::printf("RMSE: %.6g  PSNR (reference peak=%.6g): %.2f dB\n", rmse, peak, psnr);
+    std::printf("RMSE (luminance): %.6g  PSNR_luma (reference peak=%.6g): %.2f dB\n", rmse_lum, peak_lum, psnr_lum);
     return 0;
 }

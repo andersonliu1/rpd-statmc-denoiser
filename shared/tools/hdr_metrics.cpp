@@ -41,6 +41,8 @@ int main(int argc, char** argv) {
 
     const int pixels = ref.w * ref.h;
     double sum_sq = 0.0;
+    double sum_abs = 0.0;
+    double peak = 0.0;
     double mean_ref[3] = {0.0, 0.0, 0.0};
     double mean_test[3] = {0.0, 0.0, 0.0};
 
@@ -49,6 +51,8 @@ int main(int argc, char** argv) {
             double a = ref.pixels[3 * i + c];
             double b = test.pixels[3 * i + c];
             sum_sq += (a - b) * (a - b);
+            sum_abs += std::abs(a - b);
+            peak = std::max(peak, std::abs(a));
             mean_ref[c] += a;
             mean_test[c] += b;
         }
@@ -60,8 +64,9 @@ int main(int argc, char** argv) {
 
     // Global SSIM per channel
     double ssim[3] = {0.0, 0.0, 0.0};
-    const double C1 = 0.01 * 0.01;
-    const double C2 = 0.03 * 0.03;
+    if (peak <= 0.0) peak = 1.0;
+    const double C1 = (0.01 * peak) * (0.01 * peak);
+    const double C2 = (0.03 * peak) * (0.03 * peak);
     for (int c = 0; c < 3; ++c) {
         double var_ref = 0.0, var_test = 0.0, cov = 0.0;
         for (int i = 0; i < pixels; ++i) {
@@ -80,10 +85,12 @@ int main(int argc, char** argv) {
     }
 
     double mse = sum_sq / (pixels * 3);
-    double psnr = compute_psnr(mse);
+    double rmse = std::sqrt(mse);
+    double psnr = (rmse > 0.0) ? 20.0 * std::log10(peak / rmse) : INFINITY;
 
-    std::printf("PSNR: %.2f dB (vs max=1.0)\n", psnr);
-    std::printf("SSIM (global, per channel): R=%.4f G=%.4f B=%.4f  mean=%.4f\n", ssim[0], ssim[1], ssim[2], (ssim[0] + ssim[1] + ssim[2]) / 3.0);
+    std::printf("MAE: %.6g  RMSE: %.6g  PSNR (reference peak=%.6g): %.2f dB\n",
+                sum_abs / (pixels * 3), rmse, peak, psnr);
+    std::printf("SSIM (global diagnostic, per channel): R=%.4f G=%.4f B=%.4f  mean=%.4f\n", ssim[0], ssim[1], ssim[2], (ssim[0] + ssim[1] + ssim[2]) / 3.0);
 
     if (argc == 4) {
         std::vector<float> residual(3 * pixels);

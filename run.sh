@@ -5,6 +5,7 @@ BUILD_ROOT="build"
 BUILD_DIR=""
 TARGET="path_tracer"
 CLEAN=false
+TEST=false
 CONFIG_ARGS=()
 BUILD_ARGS=()
 
@@ -36,10 +37,11 @@ perform_clean() {
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") [clean] [options] [-- <cmake configure args>]
+Usage: $(basename "$0") [clean|test] [options] [-- <cmake configure args>]
 
 Commands:
   clean                 Remove the configured build directory.
+  test                  Build and run the CTest suite.
 
 Options:
   -t, --target <name>     Build only the specified CMake target (default: path_tracer)
@@ -55,6 +57,10 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         clean)
             CLEAN=true
+            shift
+            ;;
+        test)
+            TEST=true
             shift
             ;;
         -t|--target)
@@ -89,7 +95,11 @@ if [[ -z "$TARGET" ]]; then
 fi
 
 if [[ -z "$BUILD_DIR" ]]; then
-    BUILD_DIR="${BUILD_ROOT}/${TARGET}_build"
+    if [[ "$TEST" == true ]]; then
+        BUILD_DIR="${BUILD_ROOT}/path_tracer_build"
+    else
+        BUILD_DIR="${BUILD_ROOT}/${TARGET}_build"
+    fi
 fi
 
 if [[ "$CLEAN" == true ]]; then
@@ -102,9 +112,17 @@ else
     cmake -S . -B "$BUILD_DIR"
 fi
 
-BUILD_CMD=(cmake --build "$BUILD_DIR" --target "$TARGET")
+if [[ "$TEST" == true ]]; then
+    BUILD_CMD=(cmake --build "$BUILD_DIR" --target stats_test config_test)
+else
+    BUILD_CMD=(cmake --build "$BUILD_DIR" --target "$TARGET")
+fi
 if [[ ${#BUILD_ARGS[@]} -gt 0 ]]; then
     BUILD_CMD+=("${BUILD_ARGS[@]}")
 fi
 
 "${BUILD_CMD[@]}"
+
+if [[ "$TEST" == true ]]; then
+    ctest --test-dir "$BUILD_DIR" --output-on-failure
+fi
