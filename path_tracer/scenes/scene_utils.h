@@ -37,11 +37,10 @@ inline std::vector<Triangle> make_ground_plane(float size, float y, int material
     Vec3f v2(half, y, half);
     Vec3f v3(-half, y, half);
 
-    // Counter-clockwise winding for upward-facing normal
     triangles.push_back(make_triangle(v0, v2, v1, material_id));
     triangles.push_back(make_triangle(v0, v3, v2, material_id));
 
     return triangles;
 }
 
-} // namespace scenes
+}

@@ -16,14 +16,13 @@ inline Scene make_bunny_dof() {
     Scene scene;
     scene.environment_color = Vec3f::Zero();
 
-    // Cornell-like box materials
     const std::array<Material, 6> material_defs = {
-        Material{Lambertian{Vec3f(0.874f, 0.874f, 0.875f)}}, // Back
-        Material{Lambertian{Vec3f(0.874f, 0.874f, 0.875f)}}, // Bottom
-        Material{Lambertian{Vec3f(0.0f, 0.2117f, 0.3765f)}}, // Left
-        Material{Lambertian{Vec3f(0.996f, 0.7373f, 0.0667f)}}, // Right
-        Material{Lambertian{Vec3f(0.874f, 0.874f, 0.875f)}}, // Top
-        Material{Lambertian{Vec3f(1.0f, 1.0f, 1.0f)}} // Light
+        Material{Lambertian{Vec3f(0.874f, 0.874f, 0.875f)}},
+        Material{Lambertian{Vec3f(0.874f, 0.874f, 0.875f)}},
+        Material{Lambertian{Vec3f(0.0f, 0.2117f, 0.3765f)}},
+        Material{Lambertian{Vec3f(0.996f, 0.7373f, 0.0667f)}},
+        Material{Lambertian{Vec3f(0.874f, 0.874f, 0.875f)}},
+        Material{Lambertian{Vec3f(1.0f, 1.0f, 1.0f)}}
     };
 
     std::array<int, material_defs.size()> material_ids{};
@@ -77,7 +76,6 @@ inline Scene make_bunny_dof() {
                   to_scene(Vec3f(light_x + light_len_x, light_y_sn + light_len_y, light_z_sn)),
                   to_scene(Vec3f(light_x + light_len_x, light_y_sn, light_z_sn)));
 
-    // Box walls
     scene.add_triangle(make_triangle(to_scene(Vec3f(0.000000133f, -0.559199989f, 0.548799932f)),
                                      to_scene(Vec3f(0.555999935f, -0.559199989f, 0.000000040f)),
                                      to_scene(Vec3f(0.000000133f, -0.559199989f, 0.000000040f)), back_id));
@@ -113,11 +111,9 @@ inline Scene make_bunny_dof() {
                                      to_scene(Vec3f(0.555999935f, -0.000000119f, 0.548799932f)),
                                      to_scene(Vec3f(0.555999935f, -0.559199989f, 0.548799932f)), top_id));
 
-    // Load bunny mesh once
     const std::filesystem::path bunny_path = std::filesystem::path("resources/models/bunny.obj");
     std::vector<Triangle> bunny_mesh = load_obj(bunny_path.string(), bunny_mat_diffuse);
 
-    // Normalize bunny mesh bounds for instancing
     Vec3f min_bounds = Vec3f::Constant(std::numeric_limits<float>::max());
     Vec3f max_bounds = Vec3f::Constant(std::numeric_limits<float>::lowest());
     for (const Triangle& tri : bunny_mesh) {
@@ -138,7 +134,7 @@ inline Scene make_bunny_dof() {
     };
 
     auto add_bunny_instance = [&](const Vec3f& translate, float target_height, float yaw, int material_override) {
-        float scale = 1.2f * target_height / height; // 20% larger
+        float scale = 1.2f * target_height / height;
         const float face_angle = static_cast<float>(M_PI);
         for (Triangle tri : bunny_mesh) {
             for (int i = 0; i < 3; ++i) {
@@ -157,14 +153,13 @@ inline Scene make_bunny_dof() {
         }
     };
 
-    // Multiple bunnies at varying depths and scales
-    add_bunny_instance(Vec3f(0.18f, 1e-3f, 0.20f), 0.14f, 0.1f, bunny_mat_diffuse);  // near
-    add_bunny_instance(Vec3f(0.34f, 1e-3f, 0.34f), 0.12f, -0.2f, bunny_mat_gold);    // mid-near
-    add_bunny_instance(Vec3f(0.22f, 1e-3f, 0.46f), 0.15f, 0.25f, bunny_mat_copper);  // mid (focus)
-    add_bunny_instance(Vec3f(0.42f, 1e-3f, 0.52f), 0.13f, -0.35f, bunny_mat_diffuse); // mid-far
-    add_bunny_instance(Vec3f(0.30f, 1e-3f, 0.62f), 0.11f, 0.4f, bunny_mat_gold);     // far
+    add_bunny_instance(Vec3f(0.18f, 1e-3f, 0.20f), 0.14f, 0.1f, bunny_mat_diffuse);
+    add_bunny_instance(Vec3f(0.34f, 1e-3f, 0.34f), 0.12f, -0.2f, bunny_mat_gold);
+    add_bunny_instance(Vec3f(0.22f, 1e-3f, 0.46f), 0.15f, 0.25f, bunny_mat_copper);
+    add_bunny_instance(Vec3f(0.42f, 1e-3f, 0.52f), 0.13f, -0.35f, bunny_mat_diffuse);
+    add_bunny_instance(Vec3f(0.30f, 1e-3f, 0.62f), 0.11f, 0.4f, bunny_mat_gold);
 
     return scene;
 }
 
-} // namespace scenes
+}

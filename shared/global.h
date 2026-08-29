@@ -12,6 +12,9 @@ template<class T> using Vec4 = Vec<4, T>;
 using Vec2f = Vec2<float>;
 using Vec3f = Vec3<float>;
 using Vec4f = Vec4<float>;
+using Vec2d = Vec2<double>;
+using Vec3d = Vec3<double>;
+using Vec4d = Vec4<double>;
 
 using Vec2i = Vec2<int>;
 using Vec3i = Vec3<int>;
@@ -25,6 +28,9 @@ template<class T> using Mat4 = Mat<T, 4, 4>;
 using Mat2f = Mat2<float>;
 using Mat3f = Mat3<float>;
 using Mat4f = Mat4<float>;
+using Mat2d = Mat2<double>;
+using Mat3d = Mat3<double>;
+using Mat4d = Mat4<double>;
 
 template <int N, typename T>
 inline Vec<N, T> clamp(const Vec<N, T>& v, const Vec<N, T>& min_val, const Vec<N, T>& max_val) {

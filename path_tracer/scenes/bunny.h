@@ -16,12 +16,12 @@ inline Scene make_bunny() {
     scene.environment_color = Vec3f::Zero();
 
     const std::array<Material, 6> material_defs = {
-        Material{Lambertian{Vec3f(0.874000013f, 0.874000013f, 0.875000000f)}}, // Back
-        Material{Lambertian{Vec3f(0.874000013f, 0.874000013f, 0.875000000f)}}, // Bottom
-        Material{Lambertian{Vec3f(0.0f, 0.2117f, 0.3765f)}},                   // Left
-        Material{Lambertian{Vec3f(0.996f, 0.7373f, 0.0667f)}},                  // Right
-        Material{Lambertian{Vec3f(0.874000013f, 0.874000013f, 0.875000000f)}}, // Top
-        Material{Lambertian{Vec3f(1.0f, 1.0f, 1.0f)}}                           // Light
+        Material{Lambertian{Vec3f(0.874000013f, 0.874000013f, 0.875000000f)}},
+        Material{Lambertian{Vec3f(0.874000013f, 0.874000013f, 0.875000000f)}},
+        Material{Lambertian{Vec3f(0.0f, 0.2117f, 0.3765f)}},
+        Material{Lambertian{Vec3f(0.996f, 0.7373f, 0.0667f)}},
+        Material{Lambertian{Vec3f(0.874000013f, 0.874000013f, 0.875000000f)}},
+        Material{Lambertian{Vec3f(1.0f, 1.0f, 1.0f)}}
     };
 
     std::array<int, material_defs.size()> material_ids{};
@@ -66,7 +66,6 @@ inline Scene make_bunny() {
                   to_scene(Vec3f(light_x + light_len_x, light_y_sn + light_len_y, light_z_sn)),
                   to_scene(Vec3f(light_x + light_len_x, light_y_sn, light_z_sn)));
 
-    // Back wall
     scene.add_triangle(make_triangle(to_scene(Vec3f(0.000000133f, -0.559199989f, 0.548799932f)),
                                      to_scene(Vec3f(0.555999935f, -0.559199989f, 0.000000040f)),
                                      to_scene(Vec3f(0.000000133f, -0.559199989f, 0.000000040f)), back_id));
@@ -74,7 +73,6 @@ inline Scene make_bunny() {
                                      to_scene(Vec3f(0.555999935f, -0.559199989f, 0.548799932f)),
                                      to_scene(Vec3f(0.555999935f, -0.559199989f, 0.000000040f)), back_id));
 
-    // Bottom
     scene.add_triangle(make_triangle(to_scene(Vec3f(0.000000133f, -0.559199989f, 0.000000040f)),
                                      to_scene(Vec3f(0.555999935f, -0.559199989f, 0.000000040f)),
                                      to_scene(Vec3f(0.555999935f, -0.000000119f, 0.000000040f)), bottom_id));
@@ -82,7 +80,6 @@ inline Scene make_bunny() {
                                      to_scene(Vec3f(0.555999935f, -0.000000119f, 0.000000040f)),
                                      to_scene(Vec3f(0.000000133f, -0.000000119f, 0.000000040f)), bottom_id));
 
-    // Left wall
     scene.add_triangle(make_triangle(to_scene(Vec3f(0.555999935f, -0.000000119f, 0.548799932f)),
                                      to_scene(Vec3f(0.555999935f, -0.000000119f, 0.000000040f)),
                                      to_scene(Vec3f(0.555999935f, -0.559199989f, 0.000000040f)), left_id));
@@ -90,7 +87,6 @@ inline Scene make_bunny() {
                                      to_scene(Vec3f(0.555999935f, -0.559199989f, 0.000000040f)),
                                      to_scene(Vec3f(0.555999935f, -0.559199989f, 0.548799932f)), left_id));
 
-    // Right wall
     scene.add_triangle(make_triangle(to_scene(Vec3f(0.000000133f, -0.559199989f, 0.000000040f)),
                                      to_scene(Vec3f(0.000000133f, -0.000000119f, 0.000000040f)),
                                      to_scene(Vec3f(0.000000133f, -0.000000119f, 0.548799932f)), right_id));
@@ -98,7 +94,6 @@ inline Scene make_bunny() {
                                      to_scene(Vec3f(0.000000133f, -0.000000119f, 0.548799932f)),
                                      to_scene(Vec3f(0.000000133f, -0.559199989f, 0.548799932f)), right_id));
 
-    // Top
     scene.add_triangle(make_triangle(to_scene(Vec3f(0.000000133f, -0.000000119f, 0.548799932f)),
                                      to_scene(Vec3f(0.555999935f, -0.559199989f, 0.548799932f)),
                                      to_scene(Vec3f(0.000000133f, -0.559199989f, 0.548799932f)), top_id));
@@ -132,7 +127,7 @@ inline Scene make_bunny() {
         return Vec3f(c * v.x() + s * v.z(), v.y(), -s * v.x() + c * v.z());
     };
 
-    const float face_angle = static_cast<float>(M_PI); // rotate to face camera
+    const float face_angle = static_cast<float>(M_PI);
 
     for (Triangle& tri : bunny_mesh) {
         for (int i = 0; i < 3; ++i) {
@@ -152,4 +147,4 @@ inline Scene make_bunny() {
     return scene;
 }
 
-} // namespace scenes
+}

@@ -11,6 +11,7 @@
 #include <limits>
 #include <cctype>
 #include <cmath>
+#include <numeric>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -41,27 +42,171 @@ std::vector<PixelStats> pixel_stats;
 rpf::Grid rpf_grid{};
 uint32_t g_sampler_base_seed = 0;
 
-// Approximate two-sided critical t value for significance alpha; returns ~t_{1 - alpha/2, df}.
+struct DerivedFeatureCache {
+    bool valid = false;
+    int width = 0;
+    int height = 0;
+    std::vector<Vec3f> normals_unit;
+    std::vector<float> depth_avg;
+    std::vector<Vec3f> albedo_avg;
+};
+
+struct SensitivityImageCache {
+    bool valid = false;
+    int width = 0;
+    int height = 0;
+    std::vector<float> all;
+    std::vector<float> all_conf;
+    std::vector<float> pixel;
+    std::vector<float> pixel_conf;
+    std::vector<float> brdf;
+    std::vector<float> brdf_conf;
+    std::vector<float> lens;
+    std::vector<float> lens_conf;
+    std::vector<float> light;
+    std::vector<float> light_conf;
+    std::vector<float> environment;
+    std::vector<float> environment_conf;
+    std::vector<float> rr;
+    std::vector<float> rr_conf;
+    std::vector<float> gradient;
+};
+
+DerivedFeatureCache g_feature_cache{};
+SensitivityImageCache g_sensitivity_cache{};
+
+static void invalidate_feature_cache() {
+    g_feature_cache.valid = false;
+}
+
+static void invalidate_sensitivity_cache() {
+    g_sensitivity_cache.valid = false;
+}
+
+static void invalidate_postprocess_caches() {
+    invalidate_feature_cache();
+    invalidate_sensitivity_cache();
+}
+
+static const DerivedFeatureCache& ensure_feature_cache(int w, int h) {
+    if (g_feature_cache.valid && g_feature_cache.width == w && g_feature_cache.height == h) return g_feature_cache;
+
+    g_feature_cache.width = w;
+    g_feature_cache.height = h;
+    g_feature_cache.normals_unit.assign(w * h, Vec3f::Zero());
+    g_feature_cache.depth_avg.assign(w * h, 0.0f);
+    g_feature_cache.albedo_avg.assign(w * h, Vec3f::Zero());
+
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+    for (int i = 0; i < w * h; ++i) {
+        if (buffers.hit_count[i] > 0) {
+            Vec3f n = buffers.normal[i] / float(buffers.hit_count[i]);
+            if (n.squaredNorm() > EPS_SMALL) n.normalize();
+            g_feature_cache.normals_unit[i] = n;
+            g_feature_cache.depth_avg[i] = buffers.depth[i] / float(buffers.hit_count[i]);
+            g_feature_cache.albedo_avg[i] = buffers.albedo[i] / float(buffers.hit_count[i]);
+        } else {
+            g_feature_cache.normals_unit[i] = buffers.normal[i];
+            g_feature_cache.depth_avg[i] = buffers.depth[i];
+            g_feature_cache.albedo_avg[i] = buffers.albedo[i];
+        }
+    }
+
+    g_feature_cache.valid = true;
+    return g_feature_cache;
+}
+
+static const SensitivityImageCache& ensure_sensitivity_cache(int w, int h) {
+    if (g_sensitivity_cache.valid && g_sensitivity_cache.width == w && g_sensitivity_cache.height == h) return g_sensitivity_cache;
+
+    g_sensitivity_cache.width = w;
+    g_sensitivity_cache.height = h;
+    g_sensitivity_cache.all = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.all, w, h);
+    g_sensitivity_cache.all_conf = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.all_conf, w, h);
+    g_sensitivity_cache.pixel = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.pixel, w, h);
+    g_sensitivity_cache.pixel_conf = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.pixel_conf, w, h);
+    g_sensitivity_cache.brdf = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.brdf, w, h);
+    g_sensitivity_cache.brdf_conf = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.brdf_conf, w, h);
+    g_sensitivity_cache.lens = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.lens, w, h);
+    g_sensitivity_cache.lens_conf = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.lens_conf, w, h);
+    g_sensitivity_cache.light = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.light, w, h);
+    g_sensitivity_cache.light_conf = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.light_conf, w, h);
+    g_sensitivity_cache.environment = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.environment, w, h);
+    g_sensitivity_cache.environment_conf = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.environment_conf, w, h);
+    g_sensitivity_cache.rr = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.rr, w, h);
+    g_sensitivity_cache.rr_conf = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.rr_conf, w, h);
+    g_sensitivity_cache.gradient = buffers.sensitivity_gradient;
+
+    if (g_sensitivity_cache.gradient.size() != static_cast<size_t>(w * h)) {
+        g_sensitivity_cache.gradient.assign(w * h, 0.0f);
+    }
+
+    g_sensitivity_cache.valid = true;
+    return g_sensitivity_cache;
+}
+
+static float sample_scalar_local_average(const std::vector<float>& values, int width, int height, int cx, int cy, int radius = 1) {
+    double accum = 0.0;
+    double weight_sum = 0.0;
+    for (int dy = -radius; dy <= radius; ++dy) {
+        const int y = std::clamp(cy + dy, 0, height - 1);
+        for (int dx = -radius; dx <= radius; ++dx) {
+            const int x = std::clamp(cx + dx, 0, width - 1);
+            const double weight = 1.0 / (1.0 + double(dx * dx + dy * dy));
+            accum += weight * static_cast<double>(values[y * width + x]);
+            weight_sum += weight;
+        }
+    }
+    return (weight_sum > 0.0) ? static_cast<float>(accum / weight_sum) : 0.0f;
+}
+
+static Vec3f sample_vec3_local_average(const std::vector<Vec3f>& values, int width, int height, int cx, int cy, int radius = 1) {
+    Vec3d accum = Vec3d::Zero();
+    double weight_sum = 0.0;
+    for (int dy = -radius; dy <= radius; ++dy) {
+        const int y = std::clamp(cy + dy, 0, height - 1);
+        for (int dx = -radius; dx <= radius; ++dx) {
+            const int x = std::clamp(cx + dx, 0, width - 1);
+            const double weight = 1.0 / (1.0 + double(dx * dx + dy * dy));
+            accum += values[y * width + x].cast<double>() * weight;
+            weight_sum += weight;
+        }
+    }
+    if (weight_sum <= 0.0) return Vec3f::Zero();
+    return (accum / weight_sum).cast<float>();
+}
+
+// Two-sided t critical value.
 static float lookup_t_critical(float df, float alpha) {
     df = std::max(df, 1.0f);
     alpha = std::clamp(alpha, EPS_SMALL, 0.999999f);
 
-    // Small table for alpha ~= 0.05 to capture low-DF behavior.
-    if (std::abs(alpha - 0.05f) < EPS && df < 30.5f) {
-        static const float t05_table[30] = {
+    auto interpolate_table = [df](const float (&table)[30]) {
+        const int idx_lo = std::clamp(static_cast<int>(std::floor(df)), 1, 30);
+        const int idx_hi = std::clamp(static_cast<int>(std::ceil(df)), 1, 30);
+        if (idx_lo == idx_hi) return table[idx_lo - 1];
+        return lerp(table[idx_lo - 1], table[idx_hi - 1],
+                    (df - float(idx_lo)) / float(idx_hi - idx_lo));
+    };
+
+    if (df < 30.5f && std::abs(alpha - 0.05f) < EPS) {
+        static constexpr float t05_table[30] = {
             12.706f, 4.303f, 3.182f, 2.776f, 2.571f, 2.447f, 2.365f, 2.306f, 2.262f, 2.228f,
             2.201f, 2.179f, 2.160f, 2.145f, 2.131f, 2.120f, 2.110f, 2.101f, 2.093f, 2.086f,
             2.080f, 2.074f, 2.069f, 2.064f, 2.060f, 2.056f, 2.052f, 2.048f, 2.045f, 2.042f};
-        const int idx_lo = std::clamp(static_cast<int>(std::floor(df)), 1, 30);
-        const int idx_hi = std::clamp(static_cast<int>(std::ceil(df)), 1, 30);
-        if (idx_lo == idx_hi) return t05_table[idx_lo - 1];
-        const float t_lo = t05_table[idx_lo - 1];
-        const float t_hi = t05_table[idx_hi - 1];
-        const float t = lerp(t_lo, t_hi, (df - float(idx_lo)) / (float(idx_hi - idx_lo)));
-        return t;
+        return interpolate_table(t05_table);
     }
 
-    // Fallback: normal quantile approximation (two-sided) for other alphas.
+    if (df < 30.5f && std::abs(alpha - 0.01f) < EPS) {
+        static constexpr float t01_table[30] = {
+            63.657f, 9.925f, 5.841f, 4.604f, 4.032f, 3.707f, 3.499f, 3.355f, 3.250f, 3.169f,
+            3.106f, 3.055f, 3.012f, 2.977f, 2.947f, 2.921f, 2.898f, 2.878f, 2.861f, 2.845f,
+            2.831f, 2.819f, 2.807f, 2.797f, 2.787f, 2.779f, 2.771f, 2.763f, 2.756f, 2.750f};
+        return interpolate_table(t01_table);
+    }
+
     auto normal_quantile = [](float a) {
         if (a <= 0.001f) return 3.29f;
         if (a <= 0.005f) return 2.81f;
@@ -69,7 +214,7 @@ static float lookup_t_critical(float df, float alpha) {
         if (a <= 0.02f) return 2.33f;
         if (a <= 0.05f) return 1.96f;
         if (a <= 0.10f) return 1.64f;
-        return 1.28f; // alpha ~0.20
+        return 1.28f;
     };
     float z = normal_quantile(alpha);
     if (df < 30.0f) {
@@ -101,38 +246,6 @@ struct HitInfo {
         return scene.materials[get_material_id()];
     }
 
-    Vec3f get_emission() const {
-        switch (type) {
-            case PrimitiveType::Sphere:
-                return scene.spheres[index].emission;
-            case PrimitiveType::Triangle:
-                return scene.triangles[index].emission;
-            default:
-                return Vec3f::Zero();
-        }
-    }
-
-    bool is_emitter() const {
-        switch (type) {
-            case PrimitiveType::Sphere:
-                return scene.spheres[index].is_emitter();
-            case PrimitiveType::Triangle:
-                return scene.triangles[index].is_emitter();
-            default:
-                return false;
-        }
-    }
-
-    int get_light_index() const {
-        switch (type) {
-            case PrimitiveType::Sphere:
-                return scene.sphere_to_light[index];
-            case PrimitiveType::Triangle:
-                return scene.triangle_to_light[index];
-            default:
-                return -1;
-        }
-    }
 };
 
 std::optional<Image::ToneMapping> tonemap_from_string(std::string name) {
@@ -144,6 +257,161 @@ std::optional<Image::ToneMapping> tonemap_from_string(std::string name) {
     return std::nullopt;
 }
 
+static float relative_depth_delta(float a, float b) {
+    return std::abs(a - b) / std::max({std::abs(a), std::abs(b), EPS_SMALL});
+}
+
+static uint32_t hash_u32(uint32_t x) {
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+static float hash_to_unit_float(uint32_t x) {
+    return float(hash_u32(x) & 0x00ffffffu) / float(0x01000000u);
+}
+
+static uint32_t pixel_sample_seed(int pixel_index, int sample_offset) {
+    return hash_u32(g_sampler_base_seed ^ hash_u32(static_cast<uint32_t>(pixel_index) + 0x9e3779b9u) ^
+                    hash_u32(static_cast<uint32_t>(sample_offset) + 0x85ebca6bu));
+}
+
+static bool brdf_uses_random_sample(const Material& material) {
+    return !std::holds_alternative<Mirror>(material.brdf);
+}
+
+struct SensitivityState {
+    float all = 0.0f;
+    float all_conf = 0.0f;
+    float pixel = 0.0f;
+    float pixel_conf = 0.0f;
+    float brdf = 0.0f;
+    float brdf_conf = 0.0f;
+    float lens = 0.0f;
+    float lens_conf = 0.0f;
+    float light = 0.0f;
+    float light_conf = 0.0f;
+    float environment = 0.0f;
+    float environment_conf = 0.0f;
+    float rr = 0.0f;
+    float rr_conf = 0.0f;
+    float gradient = 0.0f;
+
+    float relative_random(float value) const {
+        return rpf::relative_random_sensitivity(value, pixel);
+    }
+
+    float reliable_random(float value, float confidence) const {
+        return std::clamp(relative_random(value) * std::min(confidence, pixel_conf), 0.0f, 1.0f);
+    }
+
+    float reliable_sampling() const {
+        return std::clamp(all * all_conf, 0.0f, 1.0f);
+    }
+
+    float reliable_denoise() const {
+        return std::clamp(all * all_conf * (1.0f - gradient * (1.0f - all_conf)), 0.0f, 1.0f);
+    }
+};
+
+static SensitivityState sample_sensitivity(const SensitivityImageCache& cache, int idx) {
+    SensitivityState s;
+    s.all = std::clamp(cache.all[idx], 0.0f, 1.0f);
+    s.all_conf = std::clamp(cache.all_conf[idx], 0.0f, 1.0f);
+    s.pixel = std::clamp(cache.pixel[idx], 0.0f, 1.0f);
+    s.pixel_conf = std::clamp(cache.pixel_conf[idx], 0.0f, 1.0f);
+    s.brdf = std::clamp(cache.brdf[idx], 0.0f, 1.0f);
+    s.brdf_conf = std::clamp(cache.brdf_conf[idx], 0.0f, 1.0f);
+    s.lens = std::clamp(cache.lens[idx], 0.0f, 1.0f);
+    s.lens_conf = std::clamp(cache.lens_conf[idx], 0.0f, 1.0f);
+    s.light = std::clamp(cache.light[idx], 0.0f, 1.0f);
+    s.light_conf = std::clamp(cache.light_conf[idx], 0.0f, 1.0f);
+    s.environment = std::clamp(cache.environment[idx], 0.0f, 1.0f);
+    s.environment_conf = std::clamp(cache.environment_conf[idx], 0.0f, 1.0f);
+    s.rr = std::clamp(cache.rr[idx], 0.0f, 1.0f);
+    s.rr_conf = std::clamp(cache.rr_conf[idx], 0.0f, 1.0f);
+    if (idx < static_cast<int>(cache.gradient.size())) {
+        s.gradient = std::clamp(cache.gradient[idx], 0.0f, 1.0f);
+    }
+    return s;
+}
+
+static void accumulate_rpf_sample_to_grid(rpf::Grid& grid, int x, int y, const rpf::Sample& sample, float sample_lum_total) {
+    if (!sample.pixel_valid && !sample.lens_valid && !sample.has_any_shading_data()) return;
+
+    const float gx = float(x) / float(grid.step);
+    const float gy = float(y) / float(grid.step);
+    const int x0 = std::clamp(static_cast<int>(std::floor(gx)), 0, grid.nodes_x - 1);
+    const int y0 = std::clamp(static_cast<int>(std::floor(gy)), 0, grid.nodes_y - 1);
+    const int x1 = std::min(x0 + 1, grid.nodes_x - 1);
+    const int y1 = std::min(y0 + 1, grid.nodes_y - 1);
+    const float tx = std::clamp(gx - float(x0), 0.0f, 1.0f);
+    const float ty = std::clamp(gy - float(y0), 0.0f, 1.0f);
+
+    const struct NodeWeight { int nx; int ny; float w; } weights[4] = {
+        {x0, y0, (1.0f - tx) * (1.0f - ty)},
+        {x1, y0, tx * (1.0f - ty)},
+        {x0, y1, (1.0f - tx) * ty},
+        {x1, y1, tx * ty},
+    };
+
+    for (const auto& entry : weights) {
+        if (entry.w <= EPS_SMALL) continue;
+        auto& node = grid(entry.nx, entry.ny);
+        if (sample.pixel_valid) {
+            const float half_support = 0.5f * float(grid.support_size);
+            const float support_left = float(entry.nx * grid.step) - half_support;
+            const float support_top = float(entry.ny * grid.step) - half_support;
+            const float screen_u = std::clamp(
+                (float(x) + sample.pixel_u.x() - support_left) / float(grid.support_size), 0.0f, 1.0f);
+            const float screen_v = std::clamp(
+                (float(y) + sample.pixel_u.y() - support_top) / float(grid.support_size), 0.0f, 1.0f);
+            node.pixel.add(screen_u, screen_v, sample_lum_total, entry.w);
+        }
+        if (sample.lens_valid) node.lens.add(sample.lens_u.x(), sample.lens_u.y(), sample_lum_total, entry.w);
+        if (sample.brdf_valid) node.brdf.add(sample.brdf_u.x(), sample.brdf_u.y(), sample_lum_total, entry.w);
+        if (sample.light_valid) node.light_uv.add(sample.light_u.x(), sample.light_u.y(), sample_lum_total, entry.w);
+        if (sample.environment_valid) {
+            node.environment.add(sample.environment_u.x(), sample.environment_u.y(), sample_lum_total, entry.w);
+        }
+        if (sample.light_select_valid) node.light_select.add(sample.light_index, sample_lum_total, entry.w);
+        if (sample.light_uv_visibility_valid && sample.light_valid) {
+            const int light_x = std::clamp(static_cast<int>(sample.light_u.x() * 4.0f), 0, 3);
+            const int light_y = std::clamp(static_cast<int>(sample.light_u.y() * 4.0f), 0, 3);
+            node.light_uv_visibility.add(light_y * 4 + light_x, sample.light_uv_visible, entry.w);
+        }
+        if (sample.light_select_visibility_valid && sample.light_select_valid) {
+            node.light_select_visibility.add(sample.light_index, sample.light_select_visible, entry.w);
+        }
+        if (sample.environment_visibility_valid && sample.environment_valid) {
+            const int env_x = std::clamp(static_cast<int>(sample.environment_u.x() * 4.0f), 0, 3);
+            const int env_y = std::clamp(static_cast<int>(sample.environment_u.y() * 4.0f), 0, 3);
+            node.environment_visibility.add(
+                env_y * 4 + env_x, sample.environment_visible, entry.w);
+        }
+        if (sample.rr_valid) node.rr.add(sample.rr_survived ? 1 : 0, sample_lum_total, entry.w);
+    }
+}
+
+static void merge_rpf_grids_into(rpf::Grid& dst, const std::vector<rpf::Grid>& sources) {
+    const int node_count = dst.nodes_x * dst.nodes_y;
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+    for (int idx = 0; idx < node_count; ++idx) {
+        for (const auto& source : sources) {
+            dst.nodes[idx].merge(source.nodes[idx]);
+        }
+    }
+}
+
+/// @brief Estimates direct illumination with light and BRDF sampling.
+/// @param hit Surface interaction to shade.
+/// @param rpf_sample Optional random-parameter capture record.
+/// @return Direct radiance leaving the surface.
 Vec3f shade_mis(const HitInfo& hit, rpf::Sample* rpf_sample = nullptr) {
     const Material& material = hit.get_material();
     const Vec3f& p = hit.position;
@@ -152,15 +420,16 @@ Vec3f shade_mis(const HitInfo& hit, rpf::Sample* rpf_sample = nullptr) {
 
     Vec3f L_dir = Vec3f::Zero();
 
-    const auto [light_index, light_select_pdf] = scene.sample_light(Sampler::next1d());
+    const float light_select_u = Sampler::next1d();
+    const auto [light_index, light_select_pdf] = scene.sample_light(light_select_u);
+    const bool captured_light_select = rpf_sample && rpf_sample->capture_light_select(
+        light_index, light_index >= 0 && light_index < rpf::LIGHT_CATEGORY_BINS);
 
     if (light_index >= 0) {
-        Light light = scene.lights[light_index];
-        bool is_delta = is_delta_light(light);
+        const Light& light = scene.lights[light_index];
+        const bool is_delta = is_delta_light(light);
         Vec2f light_u = Sampler::next2d();
-        if (rpf_sample && !rpf_sample->valid) {
-            rpf_sample->light_u = light_u;
-        }
+        const bool captured_light_uv = rpf_sample && rpf_sample->capture_light_uv(light_u, !is_delta);
 
         auto sample_light = [&](const auto& light_obj) {
             using T = std::decay_t<decltype(light_obj)>;
@@ -182,38 +451,42 @@ Vec3f shade_mis(const HitInfo& hit, rpf::Sample* rpf_sample = nullptr) {
 
                 Ray shadow_ray(offset_ray_origin(p, normal), light_sample.wi_world);
                 bool hit_shadow = any_hit_combined(shadow_ray, light_sample.light_dist, bvh, scene.triangles, scene.spheres);
+                if (captured_light_select) rpf_sample->capture_light_select_visibility(!hit_shadow);
+                if (captured_light_uv) rpf_sample->capture_light_uv_visibility(!hit_shadow);
 
                 if (!hit_shadow) {
                     Vec3f f = brdf_eval(material, wo, light_sample.wi_world, normal);
                     Vec3f emitted = eval_light(light, -light_sample.wi_world, light_sample.light_dist);
                     if (emitted.maxCoeff() > 0.0f) {
                         Vec3f contribution = emitted.cwiseProduct(f) * std::max(0.0f, normal.dot(light_sample.wi_world)) / pdf_light;
-                        L_dir += w_light * contribution;
+                        const Vec3f weighted_contribution = w_light * contribution;
+                        L_dir += weighted_contribution;
                     }
                 }
             }
         }
     }
 
-
-    Vec3f env_dir = Sampler::sample_sphere();
-    constexpr float pdf_env = 1.0f / (4.0f * M_PI);
-
-    float brdf_pdf_env = brdf_pdf(material, wo, env_dir, normal);
-    float w_env = pdf_env / (pdf_env + brdf_pdf_env);
-
-    Ray env_ray(offset_ray_origin(p, normal), env_dir);
-    bool blocked = any_hit_combined(env_ray, std::numeric_limits<float>::infinity(), bvh, scene.triangles, scene.spheres);
-    if (!blocked) {
-        Vec3f f = brdf_eval(material, wo, env_dir, normal);
-        float cos_term = std::max(0.0f, normal.dot(env_dir));
-        L_dir += w_env * scene.environment_color.cwiseProduct(f) * (cos_term / pdf_env);
+    const Vec2f environment_u = Sampler::next2d();
+    if (scene.environment_color.maxCoeff() > 0.0f) {
+        const Vec3f env_dir = Sampler::sample_sphere(environment_u);
+        const bool capture_environment = rpf_sample && rpf_sample->capture_environment(environment_u);
+        constexpr float pdf_env = 1.0f / (4.0f * M_PI);
+        const float brdf_pdf_env = brdf_pdf(material, wo, env_dir, normal);
+        const float w_env = pdf_env / (pdf_env + brdf_pdf_env);
+        const Ray env_ray(offset_ray_origin(p, normal), env_dir);
+        const bool blocked = any_hit_combined(
+            env_ray, std::numeric_limits<float>::infinity(), bvh, scene.triangles, scene.spheres);
+        if (capture_environment) rpf_sample->capture_environment_visibility(!blocked);
+        if (!blocked) {
+            const Vec3f f = brdf_eval(material, wo, env_dir, normal);
+            const float cos_term = std::max(0.0f, normal.dot(env_dir));
+            L_dir += w_env * scene.environment_color.cwiseProduct(f) * (cos_term / pdf_env);
+        }
     }
 
     Vec2f brdf_u = Sampler::next2d();
-    if (rpf_sample && !rpf_sample->valid) {
-        rpf_sample->brdf_u = brdf_u;
-    }
+    if (rpf_sample && brdf_uses_random_sample(material)) rpf_sample->capture_brdf(brdf_u);
     const auto [ray_dir, pdf] = brdf_sample(material, wo, normal, brdf_u);
 
     Vec3f L_indir = Vec3f::Zero();
@@ -239,7 +512,7 @@ Vec3f shade_mis(const HitInfo& hit, rpf::Sample* rpf_sample = nullptr) {
         }
 
         if (is_ray_hit && hit_is_emitter) {
-            Light emitter = scene.lights[emitter_idx];
+            const Light& emitter = scene.lights[emitter_idx];
 
             float w_brdf = 1.0f;
             if (!is_delta_light(emitter)) {
@@ -260,9 +533,7 @@ Vec3f shade_mis(const HitInfo& hit, rpf::Sample* rpf_sample = nullptr) {
 
         const float p_rr = 0.8f;
         float ksi = Sampler::next1d();
-        if (rpf_sample && !rpf_sample->valid) {
-            rpf_sample->rr_u = ksi;
-        }
+        if (rpf_sample) rpf_sample->capture_rr(ksi < p_rr);
 
         if (ksi < p_rr) {
             if (is_ray_hit && !hit_is_emitter) {
@@ -277,35 +548,40 @@ Vec3f shade_mis(const HitInfo& hit, rpf::Sample* rpf_sample = nullptr) {
         }
     }
 
-    if (rpf_sample && !rpf_sample->valid) {
-        rpf_sample->valid = true;
-    }
-
     return L_dir + L_indir;
 }
 
+/// @brief Recursively traces a path and records per-pixel features.
+/// @param ray Initial ray.
+/// @param index Pixel index receiving feature statistics.
+/// @param rpf_sample Optional random-parameter capture record.
+/// @return Estimated path radiance.
 Vec3f mis_path_trace(Ray ray, int index, rpf::Sample* rpf_sample = nullptr) {
     const auto [is_hit, t_min, prim_type, idx, hit_normal] =
         closest_hit_combined(ray, bvh, scene.triangles, scene.spheres);
     if (!is_hit) return scene.environment_color;
 
     const Vec3f hit_pos = ray.at(t_min);
-    Vec3f normal, emission, albedo;
+    Vec3f normal, albedo;
     int material_id;
+    bool hit_is_emitter;
+    int light_idx;
 
     switch (prim_type) {
         case PrimitiveType::Sphere: {
             const Sphere& sphere = scene.spheres[idx];
             normal = hit_normal;
-            emission = sphere.emission;
             material_id = sphere.material_id;
+            hit_is_emitter = sphere.is_emitter();
+            light_idx = hit_is_emitter ? scene.sphere_to_light[idx] : -1;
             break;
         }
         case PrimitiveType::Triangle: {
             const Triangle& tri = scene.triangles[idx];
             normal = tri.normal;
-            emission = tri.emission;
             material_id = tri.material_id;
+            hit_is_emitter = tri.is_emitter();
+            light_idx = hit_is_emitter ? scene.triangle_to_light[idx] : -1;
             break;
         }
     }
@@ -318,20 +594,6 @@ Vec3f mis_path_trace(Ray ray, int index, rpf::Sample* rpf_sample = nullptr) {
     buffers.world_pos[index] += hit_pos;
     buffers.depth[index] += t_min;
 
-    bool hit_is_emitter = false;
-    int light_idx = -1;
-
-    switch (prim_type) {
-        case PrimitiveType::Sphere:
-            hit_is_emitter = scene.spheres[idx].is_emitter();
-            if (hit_is_emitter) light_idx = scene.sphere_to_light[idx];
-            break;
-        case PrimitiveType::Triangle:
-            hit_is_emitter = scene.triangles[idx].is_emitter();
-            if (hit_is_emitter) light_idx = scene.triangle_to_light[idx];
-            break;
-    }
-
     if (hit_is_emitter) {
         return eval_light(scene.lights[light_idx], -ray.direction, t_min);
     }
@@ -341,12 +603,14 @@ Vec3f mis_path_trace(Ray ray, int index, rpf::Sample* rpf_sample = nullptr) {
     return shade_mis(hit, rpf_sample);
 }
 
+/// @brief Renders the uniform-sampling baseline.
+/// @param config Render configuration.
+/// @param camera Initialized camera.
 void render_image(const RenderConfig& config, const Camera& camera) {
     buffers.init(config.image_width, config.image_height);
-    pixel_stats.assign(config.image_width * config.image_height, PixelStats{});
+    invalidate_postprocess_caches();
 
     spdlog::info("Rendering...");
-    Sampler::ensure_thread_seed(g_sampler_base_seed, 0);
 #ifdef _OPENMP
     spdlog::info("OpenMP threads: {}", omp_get_max_threads());
 #endif
@@ -357,22 +621,25 @@ void render_image(const RenderConfig& config, const Camera& camera) {
 #ifdef _OPENMP
 #pragma omp parallel
     {
-        Sampler::ensure_thread_seed(g_sampler_base_seed, static_cast<uint32_t>(omp_get_thread_num()));
 #pragma omp for schedule(dynamic, 1)
 #endif
     for (int y = 0; y < config.image_height; ++y) {
         for (int x = 0; x < config.image_width; ++x) {
             int idx = y * config.image_width + x;
+            Sampler::init_thread(pixel_sample_seed(idx, 0));
 
             for (int s = 0; s < config.samples_per_pixel; ++s) {
-                const float u = (x + Sampler::next1d()) / (config.image_width);
-                const float v = (y + Sampler::next1d()) / (config.image_height);
+                const Vec2f pixel_u = Sampler::next2d();
+                const float u = (x + pixel_u.x()) / (config.image_width);
+                const float v = (y + pixel_u.y()) / (config.image_height);
 
-                Vec2f lens_sample = Sampler::sample_disk();
+                const Vec2f lens_u = Sampler::next2d();
+                const Vec2f lens_sample = camera.lens_radius > 0.0f
+                    ? Sampler::sample_disk(lens_u)
+                    : Vec2f::Zero();
                 Ray ray = camera.generate_ray(u, (1.0f - v), lens_sample);
                 Vec3f path_trace = mis_path_trace(ray, idx);
-
-                accumulate_sample(pixel_stats[idx], path_trace);
+                if (!path_trace.allFinite()) continue;
 
                 buffers.radiance(x,y) += path_trace;
                 buffers.sample_count[idx]++;
@@ -395,59 +662,74 @@ void render_image(const RenderConfig& config, const Camera& camera) {
 
 void recompute_sensitivity(const RenderConfig& config);
 
+/// @brief Renders the initial StatMC samples and RPD observations.
+/// @param config Render configuration.
+/// @param camera Initialized camera.
 void render_image_statmc(const RenderConfig& config, const Camera& camera) {
     buffers.init(config.image_width, config.image_height);
     pixel_stats.assign(config.image_width * config.image_height, PixelStats{});
     rpf_grid.init(config.image_width, config.image_height, config.rpf_tile_size);
     rpf_grid.reset();
+    invalidate_postprocess_caches();
 
     spdlog::info("Rendering (StatMC / RPF)...");
-    Sampler::ensure_thread_seed(g_sampler_base_seed, 0);
 #ifdef _OPENMP
     spdlog::info("OpenMP threads: {}", omp_get_max_threads());
 #endif
     auto start = std::chrono::high_resolution_clock::now();
 
     std::atomic<int> rows_completed{0};
+    const int num_rpf_grids =
+#ifdef _OPENMP
+        omp_get_max_threads();
+#else
+        1;
+#endif
+    // ponytail: full per-thread grids avoid locks; use row stripes if RSS dominates.
+    std::vector<rpf::Grid> local_rpf_grids(num_rpf_grids);
+    for (auto& grid : local_rpf_grids) {
+        grid.init(config.image_width, config.image_height, config.rpf_tile_size);
+        grid.reset();
+    }
 
 #ifdef _OPENMP
 #pragma omp parallel
     {
-        Sampler::ensure_thread_seed(g_sampler_base_seed, static_cast<uint32_t>(omp_get_thread_num()));
+        rpf::Grid& local_rpf_grid = local_rpf_grids[omp_get_thread_num()];
 #pragma omp for schedule(dynamic, 1)
 #endif
     for (int y = 0; y < config.image_height; ++y) {
         for (int x = 0; x < config.image_width; ++x) {
             int idx = y * config.image_width + x;
+            Sampler::init_thread(pixel_sample_seed(idx, pixel_stats[idx].n));
 
             for (int s = 0; s < config.samples_per_pixel; ++s) {
-                const float u = (x + Sampler::next1d()) / (config.image_width);
-                const float v = (y + Sampler::next1d()) / (config.image_height);
+                const Vec2f pixel_u = Sampler::next2d();
+                const float u = (x + pixel_u.x()) / (config.image_width);
+                const float v = (y + pixel_u.y()) / (config.image_height);
 
-                Vec2f lens_sample = Sampler::sample_disk();
+                const Vec2f lens_u = Sampler::next2d();
+                const Vec2f lens_sample = camera.lens_radius > 0.0f
+                    ? Sampler::sample_disk(lens_u)
+                    : Vec2f::Zero();
                 rpf::Sample rpf_sample{};
-                rpf_sample.lens_u = lens_sample;
+                rpf_sample.capture_pixel(pixel_u);
+                if (camera.lens_radius > 0.0f) rpf_sample.capture_lens(lens_u);
 
                 Ray ray = camera.generate_ray(u, (1.0f - v), lens_sample);
                 Vec3f path_trace = mis_path_trace(ray, idx, &rpf_sample);
+                if (!path_trace.allFinite()) continue;
                 
-                if (rpf_sample.valid) {
-                    const float sample_lum = calc_luminance(path_trace);
-                    if (std::isfinite(sample_lum)) {
-                        const int tile_idx = rpf_grid.id_from_pixel(x, y);
+                const float sample_lum = calc_luminance(path_trace);
 #ifdef _OPENMP
-#pragma omp critical
+                accumulate_rpf_sample_to_grid(local_rpf_grid, x, y, rpf_sample, sample_lum);
+#else
+                accumulate_rpf_sample_to_grid(local_rpf_grids[0], x, y, rpf_sample, sample_lum);
 #endif
-                        {
-                            auto& tile = rpf_grid.tiles[tile_idx];
-                            tile.brdf.add(rpf_sample.brdf_u.x(), rpf_sample.brdf_u.y(), sample_lum);
-                            tile.lens.add(rpf_sample.lens_u.x(), rpf_sample.lens_u.y(), sample_lum);
-                            tile.light.add(rpf_sample.light_u.x(), rpf_sample.light_u.y(), sample_lum);
-                            tile.rr.add(rpf_sample.rr_u, sample_lum);
-                        }
-                    }
-                }
 
+                if (rpf_sample.light_select_visibility_valid) {
+                    pixel_stats[idx].accumulate_light_visibility(rpf_sample.light_select_visible);
+                }
                 accumulate_sample(pixel_stats[idx], path_trace);
 
                 buffers.radiance(x,y) += path_trace;
@@ -464,6 +746,8 @@ void render_image_statmc(const RenderConfig& config, const Camera& camera) {
     }
 #endif
 
+    merge_rpf_grids_into(rpf_grid, local_rpf_grids);
+
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
     spdlog::info("Rendering completed in {} ms", duration.count());
@@ -471,271 +755,361 @@ void render_image_statmc(const RenderConfig& config, const Camera& camera) {
     recompute_sensitivity(config);
 }
 
+/// @brief Reconstructs confidence-shrunk RPD fields from grid statistics.
+/// @param config Render configuration controlling confidence shrinkage.
 void recompute_sensitivity(const RenderConfig& config) {
-    const int tiles_y = rpf_grid.tiles_y;
-    const int tiles_x = rpf_grid.tiles_x;
-    buffers.init_sensitivity(rpf_grid.tile_size);
-    constexpr int MIN_SENS_SAMPLES = 64; // damp sensitivities when pooled sample count is low
+    const auto start = std::chrono::high_resolution_clock::now();
+    const int w = config.image_width;
+    const int h = config.image_height;
+    const int nodes_x = rpf_grid.nodes_x;
+    const int nodes_y = rpf_grid.nodes_y;
+    const int step = rpf_grid.step;
+    const int node_count = nodes_x * nodes_y;
+    invalidate_sensitivity_cache();
+    buffers.init_sensitivity(rpf_grid.support_size);
+
+    const auto& features = ensure_feature_cache(w, h);
+    const auto& normals_unit = features.normals_unit;
+    const auto& depth_avg = features.depth_avg;
+    const auto& albedo_avg = features.albedo_avg;
+
+    std::vector<float> raw_pixel(node_count, 0.0f), raw_brdf(node_count, 0.0f), raw_lens(node_count, 0.0f), raw_light(node_count, 0.0f), raw_environment(node_count, 0.0f), raw_rr(node_count, 0.0f);
+    std::vector<float> conf_pixel(node_count, 0.0f), conf_brdf(node_count, 0.0f), conf_lens(node_count, 0.0f), conf_light(node_count, 0.0f), conf_environment(node_count, 0.0f), conf_rr(node_count, 0.0f);
+    std::vector<Vec3f> node_normals(node_count, Vec3f::Zero());
+    std::vector<float> node_depth(node_count, 0.0f);
+    std::vector<Vec3f> node_albedo(node_count, Vec3f::Zero());
 
 #ifdef _OPENMP
-#pragma omp parallel for collapse(2) schedule(dynamic, 1)
+#pragma omp parallel for collapse(2) schedule(static)
 #endif
-    for (int ty = 0; ty < tiles_y; ++ty) {
-        for (int tx = 0; tx < tiles_x; ++tx) {
-            const int x0 = tx * rpf_grid.tile_size;
-            const int y0 = ty * rpf_grid.tile_size;
-            const int x1 = std::min(config.image_width, x0 + rpf_grid.tile_size);
-            const int y1 = std::min(config.image_height, y0 + rpf_grid.tile_size);
-            int sample_sum = 0;
-            int hit_sum = 0;
-            for (int yy = y0; yy < y1; ++yy) {
-                for (int xx = x0; xx < x1; ++xx) {
-                    hit_sum += buffers.hit_count[yy * config.image_width + xx];
-                    sample_sum += buffers.sample_count[yy * config.image_width + xx];
-                }
-            }
-            if (hit_sum == 0) continue;
+    for (int ny = 0; ny < nodes_y; ++ny) {
+        for (int nx = 0; nx < nodes_x; ++nx) {
+            const int idx = ny * nodes_x + nx;
+            const auto sens = rpf_grid(nx, ny).computeSplitSensitivity();
+            const auto conf = rpf_grid(nx, ny).computeConfidence(config.rpf_confidence_samples);
+            raw_pixel[idx] = sens.pixel;
+            raw_brdf[idx] = sens.brdf;
+            raw_lens[idx] = sens.lens;
+            raw_light[idx] = sens.light;
+            raw_environment[idx] = sens.environment;
+            raw_rr[idx] = sens.rr;
+            conf_pixel[idx] = conf.pixel;
+            conf_brdf[idx] = conf.brdf;
+            conf_lens[idx] = conf.lens;
+            conf_light[idx] = conf.light;
+            conf_environment[idx] = conf.environment;
+            conf_rr[idx] = conf.rr;
 
-            const rpf::Tile& base_tile = rpf_grid(tx, ty);
-            if (base_tile.brdf.n == 0 && base_tile.lens.n == 0 && base_tile.light.n == 0 && base_tile.rr.n == 0) continue;
-
-            rpf::Tile pooled = base_tile;
-            int pooled_n = std::min(std::min(pooled.brdf.n, pooled.lens.n), std::min(pooled.light.n, pooled.rr.n));
-            const float expected_hits = std::max(1.0f, float(sample_sum));
-            const int target_samples = (config.rpf_target_samples > 0) ? config.rpf_target_samples : rpf::Grid::MIN_SAMPLES;
-            int max_radius = 0;
-            if (pooled_n < target_samples && expected_hits > 0.0f) {
-                const int grid_bound = std::max(0, std::min(rpf_grid.tiles_x, rpf_grid.tiles_y) - 1);
-                max_radius = std::min(config.rpf_max_radius, grid_bound);
-            }
-            for (int radius = 1; radius <= max_radius && pooled_n < target_samples; ++radius) {
-                int min_y = std::max(0, ty - radius);
-                int max_y = std::min(rpf_grid.tiles_y - 1, ty + radius);
-                int min_x = std::max(0, tx - radius);
-                int max_x = std::min(rpf_grid.tiles_x - 1, tx + radius);
-                for (int ny = min_y; ny <= max_y; ++ny) {
-                    for (int nx = min_x; nx <= max_x; ++nx) {
-                        int dx = nx - tx;
-                        int dy = ny - ty;
-                        if (std::max(std::abs(dx), std::abs(dy)) != radius) continue;
-                        const auto& neighbor = rpf_grid(nx, ny);
-                        pooled.brdf.merge(neighbor.brdf);
-                        pooled.lens.merge(neighbor.lens);
-                        pooled.light.merge(neighbor.light);
-                        pooled.rr.merge(neighbor.rr);
-                    }
-                }
-                pooled_n = std::min(std::min(pooled.brdf.n, pooled.lens.n), std::min(pooled.light.n, pooled.rr.n));
-            }
-            const float coverage = std::clamp(float(hit_sum) / expected_hits, 0.0f, 1.0f);
-            const auto sens_split = pooled.computeSplitSensitivity();
-            const float conf_brdf = std::clamp(float(pooled.brdf.n) / float(MIN_SENS_SAMPLES), 0.0f, 1.0f);
-            const float conf_lens = std::clamp(float(pooled.lens.n) / float(MIN_SENS_SAMPLES), 0.0f, 1.0f);
-            const float conf_light = std::clamp(float(pooled.light.n) / float(MIN_SENS_SAMPLES), 0.0f, 1.0f);
-            const float conf_rr = std::clamp(float(pooled.rr.n) / float(MIN_SENS_SAMPLES), 0.0f, 1.0f);
-            const float s_brdf_raw = std::clamp(conf_brdf * sens_split.brdf, 0.0f, 1.0f);
-            const float s_lens_raw = std::clamp(conf_lens * sens_split.lens, 0.0f, 1.0f);
-            const float s_light_raw = std::clamp(conf_light * sens_split.light, 0.0f, 1.0f);
-            const float rr_target = std::max(32.0f, float(std::min(target_samples, 4 * rpf::Grid::MIN_SAMPLES)));
-            const float rr_confidence = std::clamp(float(pooled.rr.n) / rr_target, 0.0f, 1.0f);
-            const float s_rr_raw = std::clamp(sens_split.rr * std::min(conf_rr, rr_confidence), 0.0f, 1.0f);
-            float product = 1.0f;
-            product *= (1.0f - s_brdf_raw);
-            product *= (1.0f - s_lens_raw);
-            product *= (1.0f - s_light_raw);
-            product *= (1.0f - s_rr_raw);
-            const float f_rp_raw = 1.0f - std::clamp(product, 0.0f, 1.0f);
-            const float f_rp = std::clamp(coverage * f_rp_raw, 0.0f, 1.0f);
-            const int tile_idx = ty * tiles_x + tx;
-            buffers.sensitivity_tiles.all[tile_idx] = f_rp;
-            const float s_brdf = std::clamp(coverage * s_brdf_raw, 0.0f, 1.0f);
-            const float s_lens = std::clamp(coverage * s_lens_raw, 0.0f, 1.0f);
-            const float s_light = std::clamp(coverage * s_light_raw, 0.0f, 1.0f);
-            const float s_rr = std::clamp(coverage * s_rr_raw, 0.0f, 1.0f);
-            buffers.sensitivity_tiles.brdf[tile_idx] = s_brdf;
-            buffers.sensitivity_tiles.lens[tile_idx] = s_lens;
-            buffers.sensitivity_tiles.light[tile_idx] = s_light;
-            buffers.sensitivity_tiles.rr[tile_idx] = s_rr;
+            const int px = std::clamp(nx * step, 0, w - 1);
+            const int py = std::clamp(ny * step, 0, h - 1);
+            node_normals[idx] = sample_vec3_local_average(normals_unit, w, h, px, py, 1);
+            if (node_normals[idx].squaredNorm() > EPS_SMALL) node_normals[idx].normalize();
+            node_depth[idx] = sample_scalar_local_average(depth_avg, w, h, px, py, 1);
+            node_albedo[idx] = sample_vec3_local_average(albedo_avg, w, h, px, py, 1);
         }
     }
-    // Low-pass filter sensitivities to reduce noisy estimates between tiles.
-    auto blur_tiles = [&](const std::vector<float>& src, int tiles_x, int tiles_y) {
-        std::vector<float> dst(src.size(), 0.0f);
-        for (int ty = 0; ty < tiles_y; ++ty) {
-            for (int tx = 0; tx < tiles_x; ++tx) {
-                float acc = 0.0f;
-                int count = 0;
+
+    auto prior_smooth = [&](const std::vector<float>& raw, const std::vector<float>& conf) {
+        std::vector<float> prior(node_count, 0.0f);
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) schedule(static)
+#endif
+        for (int ny = 0; ny < nodes_y; ++ny) {
+            for (int nx = 0; nx < nodes_x; ++nx) {
+                const int idx = ny * nodes_x + nx;
+                double weight_sum = 0.0;
+                double accum = 0.0;
                 for (int dy = -1; dy <= 1; ++dy) {
-                    int ny = ty + dy;
-                    if (ny < 0 || ny >= tiles_y) continue;
+                    const int sy = ny + dy;
+                    if (sy < 0 || sy >= nodes_y) continue;
                     for (int dx = -1; dx <= 1; ++dx) {
-                        int nx = tx + dx;
-                        if (nx < 0 || nx >= tiles_x) continue;
-                        acc += at_2d(src, nx, ny, tiles_x);
-                        ++count;
+                        const int sx = nx + dx;
+                        if (sx < 0 || sx >= nodes_x) continue;
+                        const int sidx = sy * nodes_x + sx;
+                        const float spatial_w = 1.0f / (1.0f + float(dx * dx + dy * dy));
+                        const float normal_w = std::clamp((node_normals[idx].dot(node_normals[sidx]) + 1.0f) * 0.5f, 0.0f, 1.0f);
+                        const float depth_w = std::exp(-4.0f * relative_depth_delta(node_depth[idx], node_depth[sidx]));
+                        const float albedo_w = std::exp(-2.5f * (node_albedo[idx] - node_albedo[sidx]).norm());
+                        const double w_neighbor = static_cast<double>(spatial_w) * static_cast<double>(normal_w) *
+                                                  static_cast<double>(depth_w) * static_cast<double>(albedo_w) *
+                                                  static_cast<double>(std::max(0.05f, conf[sidx]));
+                        accum += w_neighbor * static_cast<double>(raw[sidx]);
+                        weight_sum += w_neighbor;
                     }
                 }
-                at_2d(dst, tx, ty, tiles_x) = (count > 0) ? acc / float(count) : 0.0f;
+                prior[idx] = (weight_sum > static_cast<double>(EPS_SMALL))
+                                 ? static_cast<float>(accum / weight_sum)
+                                 : raw[idx];
             }
         }
-        return dst;
+        return prior;
     };
-    buffers.sensitivity_tiles.all = blur_tiles(buffers.sensitivity_tiles.all, tiles_x, tiles_y);
-    buffers.sensitivity_tiles.brdf = blur_tiles(buffers.sensitivity_tiles.brdf, tiles_x, tiles_y);
-    buffers.sensitivity_tiles.lens = blur_tiles(buffers.sensitivity_tiles.lens, tiles_x, tiles_y);
-    buffers.sensitivity_tiles.light = blur_tiles(buffers.sensitivity_tiles.light, tiles_x, tiles_y);
-    buffers.sensitivity_tiles.rr = blur_tiles(buffers.sensitivity_tiles.rr, tiles_x, tiles_y);
+
+    const std::vector<float> prior_pixel = prior_smooth(raw_pixel, conf_pixel);
+    const std::vector<float> prior_brdf = prior_smooth(raw_brdf, conf_brdf);
+    const std::vector<float> prior_lens = prior_smooth(raw_lens, conf_lens);
+    const std::vector<float> prior_light = prior_smooth(raw_light, conf_light);
+    const std::vector<float> prior_environment = prior_smooth(raw_environment, conf_environment);
+    const std::vector<float> prior_rr = prior_smooth(raw_rr, conf_rr);
+
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+    for (int idx = 0; idx < node_count; ++idx) {
+        const float final_pixel = lerp(prior_pixel[idx], raw_pixel[idx], conf_pixel[idx]);
+        const float final_brdf = lerp(prior_brdf[idx], raw_brdf[idx], conf_brdf[idx]);
+        const float final_lens = lerp(prior_lens[idx], raw_lens[idx], conf_lens[idx]);
+        const float final_light = lerp(prior_light[idx], raw_light[idx], conf_light[idx]);
+        const float final_environment = lerp(prior_environment[idx], raw_environment[idx], conf_environment[idx]);
+        const float final_rr = lerp(prior_rr[idx], raw_rr[idx], conf_rr[idx]);
+        buffers.sensitivity_tiles.pixel[idx] = std::clamp(final_pixel, 0.0f, 1.0f);
+        buffers.sensitivity_tiles.brdf[idx] = std::clamp(final_brdf, 0.0f, 1.0f);
+        buffers.sensitivity_tiles.lens[idx] = std::clamp(final_lens, 0.0f, 1.0f);
+        buffers.sensitivity_tiles.light[idx] = std::clamp(final_light, 0.0f, 1.0f);
+        buffers.sensitivity_tiles.environment[idx] = std::clamp(final_environment, 0.0f, 1.0f);
+        buffers.sensitivity_tiles.rr[idx] = std::clamp(final_rr, 0.0f, 1.0f);
+        buffers.sensitivity_tiles.pixel_conf[idx] = std::clamp(conf_pixel[idx], 0.0f, 1.0f);
+        buffers.sensitivity_tiles.brdf_conf[idx] = std::clamp(conf_brdf[idx], 0.0f, 1.0f);
+        buffers.sensitivity_tiles.lens_conf[idx] = std::clamp(conf_lens[idx], 0.0f, 1.0f);
+        buffers.sensitivity_tiles.light_conf[idx] = std::clamp(conf_light[idx], 0.0f, 1.0f);
+        buffers.sensitivity_tiles.environment_conf[idx] = std::clamp(conf_environment[idx], 0.0f, 1.0f);
+        buffers.sensitivity_tiles.rr_conf[idx] = std::clamp(conf_rr[idx], 0.0f, 1.0f);
+        const float random_components[5] = {
+            buffers.sensitivity_tiles.brdf[idx], buffers.sensitivity_tiles.lens[idx],
+            buffers.sensitivity_tiles.light[idx], buffers.sensitivity_tiles.environment[idx],
+            buffers.sensitivity_tiles.rr[idx]};
+        const float random_confidences[5] = {
+            buffers.sensitivity_tiles.brdf_conf[idx], buffers.sensitivity_tiles.lens_conf[idx],
+            buffers.sensitivity_tiles.light_conf[idx], buffers.sensitivity_tiles.environment_conf[idx],
+            buffers.sensitivity_tiles.rr_conf[idx]};
+        float relative_components[5];
+        float reliable_components[5];
+        for (int component = 0; component < 5; ++component) {
+            relative_components[component] = rpf::relative_random_sensitivity(
+                random_components[component], buffers.sensitivity_tiles.pixel[idx]);
+            reliable_components[component] = relative_components[component] * std::min(
+                random_confidences[component], buffers.sensitivity_tiles.pixel_conf[idx]);
+        }
+        const int dominant = static_cast<int>(
+            std::max_element(reliable_components, reliable_components + 5) - reliable_components);
+        buffers.sensitivity_tiles.all[idx] = relative_components[dominant];
+        buffers.sensitivity_tiles.all_conf[idx] = std::min(
+            random_confidences[dominant], buffers.sensitivity_tiles.pixel_conf[idx]);
+    }
+
+    const std::vector<float> expanded_sensitivity = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.all, w, h);
+    const std::vector<float> expanded_confidence = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.all_conf, w, h);
+    buffers.sensitivity_confidence = expanded_confidence;
+    buffers.sensitivity_gradient.assign(w * h, 0.0f);
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const int idx = y * w + x;
+            const float left = expanded_sensitivity[y * w + std::max(0, x - 1)];
+            const float right = expanded_sensitivity[y * w + std::min(w - 1, x + 1)];
+            const float up = expanded_sensitivity[std::max(0, y - 1) * w + x];
+            const float down = expanded_sensitivity[std::min(h - 1, y + 1) * w + x];
+            const float grad = std::sqrt((right - left) * (right - left) + (down - up) * (down - up));
+            buffers.sensitivity_gradient[idx] = std::clamp(0.5f * grad, 0.0f, 1.0f);
+        }
+    }
+
+    ensure_sensitivity_cache(w, h);
+    const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::high_resolution_clock::now() - start);
+    spdlog::info("Sensitivity recompute completed in {} ms", duration.count());
 }
 
+/// @brief Reconstructs radiance using statistical neighbor compatibility.
+/// @param config Render configuration controlling feature gates.
 void statmc_denoise(const RenderConfig& config) {
+    const auto start = std::chrono::high_resolution_clock::now();
     const int w = config.image_width;
     const int h = config.image_height;
     const int window_radius = config.color_window_radius;
     const float normal_threshold = config.color_normal_threshold;
     const float depth_threshold = config.color_depth_threshold;
-    const float sens_match_thresh = config.sensitivity_match_threshold;
-    const float shrinkage_rp_scale = config.rpf_shrinkage_scale;
+    const float rpd_scale = config.rpf_shrinkage_scale;
 
-    const float normal_floor = 0.1f;    // never loosen normals below this
-    const float depth_max_limit = 0.8f; // cap depth gate in DOF regions
+    const float normal_floor = 0.25f;
+    const float depth_max_limit = 0.6f;
 
-    std::vector<Vec3f> normals_unit(w * h, Vec3f::Zero());
-    std::vector<float> depth_avg(w * h, 0.0f);
-    std::vector<Vec3f> albedo_avg(w * h, Vec3f::Zero());
-    // Debug buffers: neighbor acceptance count per pixel
-    std::vector<float> neighbor_count_debug(w * h, 0.0f);
-    std::vector<float> dbg_weight_sum(w * h, 0.0f);
-    std::vector<float> dbg_neff(w * h, 0.0f);
+    const auto& features = ensure_feature_cache(w, h);
+    const auto& normals_unit = features.normals_unit;
+    const auto& depth_avg = features.depth_avg;
+    const auto& albedo_avg = features.albedo_avg;
+    const auto& sensitivity = ensure_sensitivity_cache(w, h);
+    // ponytail: 3x3 variance shrinkage; use multi-transform denoising if tails dominate.
+    std::vector<Vec3f> sqrt_variance_mean(w * h, Vec3f::Zero());
+    std::vector<Vec3f> sqrt_variance_stable(w * h, Vec3f::Zero());
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)
 #endif
     for (int i = 0; i < w * h; ++i) {
-        if (buffers.hit_count[i] > 0) {
-            Vec3f n = buffers.normal[i] / float(buffers.hit_count[i]);
-            if (n.squaredNorm() > EPS_SMALL) n.normalize();
-            normals_unit[i] = n;
-            depth_avg[i] = buffers.depth[i] / float(buffers.hit_count[i]);
-            albedo_avg[i] = buffers.albedo[i] / float(buffers.hit_count[i]);
-        } else {
-            normals_unit[i] = buffers.normal[i];
-            depth_avg[i] = buffers.depth[i];
-            albedo_avg[i] = buffers.albedo[i];
+        sqrt_variance_mean[i] = (pixel_stats[i].sqrt_color_variance() /
+            float(std::max(1, pixel_stats[i].n))).cwiseMax(EPS_SMALL);
+    }
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const int idx = y * w + x;
+            sqrt_variance_stable[idx] = sqrt_variance_mean[idx].cwiseMax(
+                sample_vec3_local_average(sqrt_variance_mean, w, h, x, y, 1));
         }
     }
+    std::vector<float> neighbor_count_debug(w * h, 0.0f);
+    std::vector<float> dbg_weight_sum(w * h, 0.0f);
+    std::vector<float> dbg_neff(w * h, 0.0f);
 
 #ifdef _OPENMP
-#pragma omp parallel for schedule(dynamic, 1)
+#pragma omp parallel for schedule(static)
 #endif
     for (int y = 0; y < h; ++y) {
         for (int x = 0; x < w; ++x) {
             int idx = y * w + x;
-            if (buffers.hit_count[idx] == 0) continue;
+            buffers.light_visibility[idx] = (pixel_stats[idx].light_visibility_n > 0)
+                ? pixel_stats[idx].light_visibility_mean()
+                : 0.0f;
+            if (buffers.hit_count[idx] == 0) {
+                buffers.denoised(x, y) = pixel_stats[idx].color_mean;
+                buffers.uncertainty[idx] = pixel_stats[idx].variance() / float(std::max(1, pixel_stats[idx].n));
+                buffers.alpha[idx] = 1.0f;
+                continue;
+            }
 
             const Vec3f normal_i = normals_unit[idx];
             const float depth_i = depth_avg[idx];
             const Vec3f mean_color_i = pixel_stats[idx].color_mean;
-            const float mean_lum_i = pixel_stats[idx].mean;
             const float var2_max = config.color_sigma_max * config.color_sigma_max;
             float var_i = pixel_stats[idx].variance();
             if (!std::isfinite(var_i)) var_i = EPS_SMALL;
             var_i = std::clamp(var_i, EPS_SMALL, var2_max);
-            const float sens_brdf_i = buffers.sensitivity_tiles.lookup(buffers.sensitivity_tiles.brdf, idx, w);
-            const float sens_lens_i = buffers.sensitivity_tiles.lookup(buffers.sensitivity_tiles.lens, idx, w);
-            const float sens_light_i = buffers.sensitivity_tiles.lookup(buffers.sensitivity_tiles.light, idx, w);
-            const float sens_rr_i = buffers.sensitivity_tiles.lookup(buffers.sensitivity_tiles.rr, idx, w);
-            const float f_rp_var_i = std::clamp(buffers.sensitivity_tiles.lookup(buffers.sensitivity_tiles.all, idx, w), 0.0f, 1.0f);
-            const float var_scale_i = std::clamp(1.0f - 0.7f * f_rp_var_i, 0.5f, 1.0f);
-            const float var_mc_i = std::max(EPS_SMALL, var_scale_i * var_i);
             const int n_i = std::max(1, pixel_stats[idx].n);
-            const float var_mean_i = var_mc_i / float(n_i);
+            const SensitivityState sens_i = sample_sensitivity(sensitivity, idx);
+            const float var_mean_i = std::max(EPS_SMALL, var_i / float(n_i));
+            const Vec3f sqrt_mean_i = pixel_stats[idx].sqrt_color_mean;
+            const Vec3f sqrt_var_mean_i = sqrt_variance_stable[idx];
             buffers.var_total_debug[idx] = var_i;
             buffers.var_eff_debug[idx] = var_mean_i;
-            buffers.var_ratio_debug[idx] = (var_i > EPS_SMALL) ? var_mc_i / var_i : 0.0f;
+            buffers.var_ratio_debug[idx] = (var_i > EPS_SMALL) ? (var_mean_i * float(n_i)) / var_i : 0.0f;
 
-            float weight_sum = 0.0f;
-            Vec3f color_sum = Vec3f::Zero();
+            double weight_sum = 0.0;
+            double weight_square_sum = 0.0;
+            double weighted_variance_sum = 0.0;
+            Vec3d color_sum = Vec3d::Zero();
+            double accepted_neighbors = 0.0;
+            constexpr double center_weight = 1.0;
 
             for (int dy = -window_radius; dy <= window_radius; ++dy) {
                 int yy = y + dy;
                 if (yy < 0 || yy >= h) continue;
                 for (int dx = -window_radius; dx <= window_radius; ++dx) {
                     int xx = x + dx;
-                    if (xx < 0 || xx >= w || (dx == 0 && dy == 0)) continue;
+                    if (xx < 0 || xx >= w) continue;
 
                     int neighbor_idx = yy * w + xx;
                     if (buffers.hit_count[neighbor_idx] == 0) continue;
 
-                    const float sens_brdf_j = buffers.sensitivity_tiles.lookup(buffers.sensitivity_tiles.brdf, neighbor_idx, w);
-                    const float sens_lens_j = buffers.sensitivity_tiles.lookup(buffers.sensitivity_tiles.lens, neighbor_idx, w);
-                    const float sens_light_j = buffers.sensitivity_tiles.lookup(buffers.sensitivity_tiles.light, neighbor_idx, w);
-                    const float sens_rr_j = buffers.sensitivity_tiles.lookup(buffers.sensitivity_tiles.rr, neighbor_idx, w);
-                    if (sens_match_thresh > 0.0f && std::abs(sens_lens_i - sens_lens_j) > sens_match_thresh) continue;
-
-                    const float s_lens = std::clamp(std::max(sens_lens_i, sens_lens_j), 0.0f, 1.0f);
-                    const float normal_gate = lerp(normal_threshold, normal_floor, s_lens);
-                    const float depth_gate_limit = lerp(depth_threshold, depth_max_limit, s_lens);
+                    const SensitivityState sens_j = sample_sensitivity(sensitivity, neighbor_idx);
+                    const float lens_reliability = std::clamp(rpd_scale * std::max(
+                        sens_i.reliable_random(sens_i.lens, sens_i.lens_conf),
+                        sens_j.reliable_random(sens_j.lens, sens_j.lens_conf)), 0.0f, 1.0f);
+                    const float normal_gate = lerp(normal_threshold, normal_floor, 0.5f * lens_reliability);
+                    const float depth_gate_limit = lerp(depth_threshold, depth_max_limit, 0.5f * lens_reliability);
 
                     const Vec3f normal_j = normals_unit[neighbor_idx];
                     if (normal_i.dot(normal_j) < normal_gate) continue;
 
-                    float depth_delta = std::abs(depth_i - depth_avg[neighbor_idx]);
+                    const float depth_delta = relative_depth_delta(depth_i, depth_avg[neighbor_idx]);
                     if (depth_delta > depth_gate_limit) continue;
 
-                    const float s_brdf = std::max(sens_brdf_i, sens_brdf_j);
-                    const float albedo_tightness = 1.0f + rpf::BRDF_ALBEDO_GAIN * s_brdf;
                     const Vec3f albedo_i = albedo_avg[idx];
                     const Vec3f albedo_j = albedo_avg[neighbor_idx];
                     const float albedo_diff = (albedo_i - albedo_j).norm();
-                    if (albedo_diff * albedo_tightness > rpf::BASE_ALBEDO_THRESH) continue;
+                    if (albedo_diff > rpf::BASE_ALBEDO_THRESH) continue;
 
-                    const float mean_lum_j = pixel_stats[neighbor_idx].mean;
+                    double visibility_q = 0.0;
+                    if (pixel_stats[idx].light_visibility_n > 0 &&
+                        pixel_stats[neighbor_idx].light_visibility_n > 0) {
+                        const float light_reliability = std::clamp(rpd_scale * std::max(
+                            sens_i.reliable_random(sens_i.light, sens_i.light_conf),
+                            sens_j.reliable_random(sens_j.light, sens_j.light_conf)), 0.0f, 1.0f);
+                        const double visibility_delta = static_cast<double>(
+                            pixel_stats[idx].light_visibility_mean() -
+                            pixel_stats[neighbor_idx].light_visibility_mean());
+                        const double visibility_variance = static_cast<double>(
+                            pixel_stats[idx].light_visibility_variance() +
+                            pixel_stats[neighbor_idx].light_visibility_variance());
+                        constexpr double visibility_chi_square_95 = 3.841458820694124;
+                        visibility_q = static_cast<double>(light_reliability) *
+                            visibility_delta * visibility_delta /
+                            std::max(static_cast<double>(EPS_SMALL), visibility_chi_square_95 * visibility_variance);
+                    }
+
                     float var_j = pixel_stats[neighbor_idx].variance();
                     if (!std::isfinite(var_j)) var_j = EPS_SMALL;
                     var_j = std::clamp(var_j, EPS_SMALL, var2_max);
-                    const float f_rp_var_j = std::clamp(buffers.sensitivity_tiles.lookup(buffers.sensitivity_tiles.all, neighbor_idx, w), 0.0f, 1.0f);
-                    const float var_scale_j = std::clamp(1.0f - 0.7f * f_rp_var_j, 0.5f, 1.0f);
-                    const float var_mc_j = std::max(EPS_SMALL, var_scale_j * var_j);
                     const int n_j = std::max(1, pixel_stats[neighbor_idx].n);
-                    const float var_mean_j = var_mc_j / float(n_j);
-                    const float s_light = std::clamp(std::max(sens_light_i, sens_light_j), 0.0f, 1.0f);
-                    const float light_factor = 1.0f + rpf::LIGHT_TTEST_GAIN * s_light;
-                    const float denom = var_mean_i + var_mean_j + EPS_SMALL;
-                    const float t2 = (mean_lum_i - mean_lum_j) * (mean_lum_i - mean_lum_j) / denom;
-                    const float v_i = var_mean_i;
-                    const float v_j = var_mean_j;
-                    const float numerator_df = (v_i + v_j) * (v_i + v_j);
-                    const float denom_df = (v_i * v_i) / std::max(float(n_i - 1), 1.0f) + (v_j * v_j) / std::max(float(n_j - 1), 1.0f);
-                    float df = (denom_df > EPS_SMALL) ? numerator_df / denom_df : float(n_i + n_j - 2);
-                    df = std::max(df, 1.0f);
-                    float t_crit = lookup_t_critical(df, config.color_compat_alpha);
-                    float t2_crit = t_crit * t_crit * light_factor;
-                    if (t2 > t2_crit) continue;
-                    const float dist2 = float(dx * dx + dy * dy);
-                    const float spatial_w = 1.0f / (1.0f + dist2);
-                    const float weight_j = spatial_w / var_mean_j;
-                    color_sum += pixel_stats[neighbor_idx].color_mean * weight_j;
+                    const float var_mean_j = std::max(EPS_SMALL, var_j / float(n_j));
+                    const Vec3f sqrt_mean_j = pixel_stats[neighbor_idx].sqrt_color_mean;
+                    const Vec3f sqrt_var_mean_j = sqrt_variance_stable[neighbor_idx];
+
+                    double max_normalized_t2 = 0.0;
+                    for (int channel = 0; channel < 3; ++channel) {
+                        const double v_i = static_cast<double>(sqrt_var_mean_i[channel]);
+                        const double v_j = static_cast<double>(sqrt_var_mean_j[channel]);
+                        const double variance_sum = v_i + v_j;
+                        const double mean_diff = static_cast<double>(sqrt_mean_i[channel] - sqrt_mean_j[channel]);
+                        const double t2 = mean_diff * mean_diff / std::max(static_cast<double>(EPS_SMALL), variance_sum);
+                        const double denom_df =
+                            (v_i * v_i) / std::max(static_cast<double>(n_i - 1), 1.0) +
+                            (v_j * v_j) / std::max(static_cast<double>(n_j - 1), 1.0);
+                        const double df = (denom_df > static_cast<double>(EPS_SMALL))
+                                              ? (variance_sum * variance_sum) / denom_df
+                                              : static_cast<double>(n_i + n_j - 2);
+                        const double t_crit = static_cast<double>(lookup_t_critical(static_cast<float>(df), config.color_compat_alpha));
+                        max_normalized_t2 = std::max(max_normalized_t2, t2 / (t_crit * t_crit));
+                    }
+                    if (max_normalized_t2 > 25.0) continue;
+
+                    const double dist2 = double(dx * dx + dy * dy);
+                    const double spatial_w = 1.0 / (1.0 + dist2);
+                    const double weight_j = spatial_w * std::exp(-0.5 * (max_normalized_t2 + visibility_q));
+                    color_sum += pixel_stats[neighbor_idx].color_mean.cast<double>() * weight_j;
                     weight_sum += weight_j;
-                    neighbor_count_debug[idx] += 1.0f;
+                    weight_square_sum += weight_j * weight_j;
+                    weighted_variance_sum += weight_j * weight_j * static_cast<double>(var_mean_j);
+                    if ((dx != 0 || dy != 0) && weight_j > 0.05 * spatial_w) {
+                        neighbor_count_debug[idx] += 1.0f;
+                        accepted_neighbors += 1.0;
+                    }
                 }
             }
 
             Vec3f mean_color_neighbors = mean_color_i;
-            float var_neighbors = var_mean_i;
-            if (weight_sum > EPS_SMALL) {
-                mean_color_neighbors = color_sum / weight_sum;
-                var_neighbors = 1.0f / weight_sum;
+            double var_neighbors = static_cast<double>(var_mean_i);
+            if (weight_sum > static_cast<double>(EPS_SMALL)) {
+                mean_color_neighbors = (color_sum / weight_sum).cast<float>();
+                var_neighbors = weighted_variance_sum / (weight_sum * weight_sum);
             }
-            dbg_weight_sum[idx] = weight_sum;
-            dbg_neff[idx] = weight_sum * var_mean_i;
+            const double effective_neighbors = weight_sum * weight_sum /
+                std::max(static_cast<double>(EPS_SMALL), weight_square_sum);
+            dbg_weight_sum[idx] = static_cast<float>(weight_sum);
+            dbg_neff[idx] = static_cast<float>(effective_neighbors);
 
-            const float shrinkage_k = config.color_shrinkage_k;
-            float k_eff = shrinkage_k;
-            k_eff = std::clamp(k_eff, 1e-8f, 1e8f);
-            const float var_for_alpha = var_i; // per-sample variance for alpha
-            float alpha = std::clamp(k_eff / (var_for_alpha + k_eff), 0.0f, 1.0f);
+            const double blend = (accepted_neighbors >= 2.0 && weight_sum >= 1.1 * center_weight)
+                ? std::clamp(1.0 - 1.0 / std::sqrt(effective_neighbors), 0.0, 0.8)
+                : 0.0;
 
-            Vec3f denoised = lerp(mean_color_i, mean_color_neighbors, 1.0f - alpha);
-            float uncertainty = alpha * alpha * var_mean_i + (1.0f - alpha) * (1.0f - alpha) * var_neighbors;
+            const float alpha = static_cast<float>(1.0 - blend);
+            Vec3f denoised = lerp(mean_color_i, mean_color_neighbors, static_cast<float>(blend));
+            const float uncertainty = static_cast<float>(
+                static_cast<double>(alpha) * static_cast<double>(alpha) * static_cast<double>(var_mean_i) +
+                blend * blend * var_neighbors);
 
             buffers.alpha[idx] = alpha;
 
@@ -743,8 +1117,14 @@ void statmc_denoise(const RenderConfig& config) {
             buffers.uncertainty[idx] = uncertainty;
         }
     }
-    // Debug output: neighbor count, alpha, variance snapshots
     if (config.debug_statmc_outputs) {
+        std::vector<float> reliability_sampling(w * h, 0.0f);
+        std::vector<float> reliability_denoise(w * h, 0.0f);
+        for (int i = 0; i < w * h; ++i) {
+            const SensitivityState sens = sample_sensitivity(sensitivity, i);
+            reliability_sampling[i] = sens.reliable_sampling();
+            reliability_denoise[i] = sens.reliable_denoise();
+        }
         scalar_to_image(neighbor_count_debug, w, h).save("debug_neighbors.hdr");
         scalar_to_image(buffers.alpha, w, h).save("debug_alpha.hdr");
         scalar_to_image(buffers.var_total_debug, w, h).save("debug_var_total.hdr");
@@ -752,29 +1132,28 @@ void statmc_denoise(const RenderConfig& config) {
         scalar_to_image(buffers.var_ratio_debug, w, h).save("debug_var_ratio.hdr");
         scalar_to_image(dbg_weight_sum, w, h).save("debug_weight_sum.hdr");
         scalar_to_image(dbg_neff, w, h).save("debug_neff.hdr");
-        // Tile sensitivity maps for each RP dimension and combined
-        auto expand_tiles = [&](const std::vector<float>& tiles) {
-            std::vector<float> out(w * h, 0.0f);
-            const auto& t = buffers.sensitivity_tiles;
-            if (t.tile_size <= 0 || t.tiles_x == 0 || t.tiles_y == 0 || tiles.empty()) return out;
-            for (int yy = 0; yy < h; ++yy) {
-                int ty = std::min(t.tiles_y - 1, yy / t.tile_size);
-                for (int xx = 0; xx < w; ++xx) {
-                    int tx = std::min(t.tiles_x - 1, xx / t.tile_size);
-                    at_2d(out, xx, yy, w) = at_2d(tiles, tx, ty, t.tiles_x);
-                }
-            }
-            return out;
-        };
-        scalar_to_image(expand_tiles(buffers.sensitivity_tiles.all), w, h).save("debug_sensitivity_all.hdr");
-        scalar_to_image(expand_tiles(buffers.sensitivity_tiles.brdf), w, h).save("debug_sensitivity_brdf.hdr");
-        scalar_to_image(expand_tiles(buffers.sensitivity_tiles.lens), w, h).save("debug_sensitivity_lens.hdr");
-        scalar_to_image(expand_tiles(buffers.sensitivity_tiles.light), w, h).save("debug_sensitivity_light.hdr");
-        scalar_to_image(expand_tiles(buffers.sensitivity_tiles.rr), w, h).save("debug_sensitivity_rr.hdr");
+        scalar_to_image(sensitivity.all, w, h).save("debug_sensitivity_all.hdr");
+        scalar_to_image(sensitivity.pixel, w, h).save("debug_sensitivity_pixel.hdr");
+        scalar_to_image(sensitivity.brdf, w, h).save("debug_sensitivity_brdf.hdr");
+        scalar_to_image(sensitivity.lens, w, h).save("debug_sensitivity_lens.hdr");
+        scalar_to_image(sensitivity.light, w, h).save("debug_sensitivity_light.hdr");
+        scalar_to_image(sensitivity.environment, w, h).save("debug_sensitivity_environment.hdr");
+        scalar_to_image(sensitivity.rr, w, h).save("debug_sensitivity_rr.hdr");
+        scalar_to_image(buffers.sensitivity_confidence, w, h).save("debug_sensitivity_confidence.hdr");
+        scalar_to_image(buffers.sensitivity_gradient, w, h).save("debug_sensitivity_gradient.hdr");
+        scalar_to_image(reliability_sampling, w, h).save("debug_reliability_sampling.hdr");
+        scalar_to_image(reliability_denoise, w, h).save("debug_reliability_denoise.hdr");
     }
+
+    const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::high_resolution_clock::now() - start);
+    spdlog::info("StatMC denoise completed in {} ms", duration.count());
 }
 
+/// @brief Stabilizes the variance-of-mean field used by adaptive sampling.
+/// @param config Render configuration controlling variance smoothing.
 void var_mean_denoise(const RenderConfig& config) {
+    const auto start = std::chrono::high_resolution_clock::now();
     const int w = config.image_width;
     const int h = config.image_height;
     const int radius = config.var_window_radius;
@@ -793,31 +1172,17 @@ void var_mean_denoise(const RenderConfig& config) {
         float v = pixel_stats[i].variance();
         if (!std::isfinite(v)) v = EPS_SMALL;
         v = std::max(EPS_SMALL, v);
-        float f_rp = std::clamp(buffers.sensitivity_tiles.lookup(buffers.sensitivity_tiles.all, i, w), 0.0f, 1.0f);
-        float sigma_mc2 = std::max(EPS_SMALL, std::clamp(1.0f - 0.7f * f_rp, 0.5f, 1.0f) * v);
-        curr[i] = std::max(EPS_SMALL, sigma_mc2);
+        const int n = std::max(1, pixel_stats[i].n);
+        curr[i] = std::max(EPS_SMALL, v / float(n));
     }
 
-    std::vector<Vec3f> normals_unit(w * h, Vec3f::Zero());
-    std::vector<float> depth_avg(w * h, 0.0f);
-#ifdef _OPENMP
-#pragma omp parallel for schedule(static)
-#endif
-    for (int i = 0; i < w * h; ++i) {
-        if (buffers.hit_count[i] > 0) {
-            Vec3f n = buffers.normal[i] / float(buffers.hit_count[i]);
-            if (n.squaredNorm() > EPS_SMALL) n.normalize();
-            normals_unit[i] = n;
-            depth_avg[i] = buffers.depth[i] / float(buffers.hit_count[i]);
-        } else {
-            normals_unit[i] = buffers.normal[i];
-            depth_avg[i] = buffers.depth[i];
-        }
-    }
+    const auto& features = ensure_feature_cache(w, h);
+    const auto& normals_unit = features.normals_unit;
+    const auto& depth_avg = features.depth_avg;
 
     auto smooth_once = [&](const std::vector<float>& src, std::vector<float>& dst) {
 #ifdef _OPENMP
-#pragma omp parallel for schedule(dynamic, 1)
+#pragma omp parallel for schedule(static)
 #endif
         for (int y = 0; y < h; ++y) {
             for (int x = 0; x < w; ++x) {
@@ -848,7 +1213,7 @@ void var_mean_denoise(const RenderConfig& config) {
                         if (normal_i.dot(normal_j) < normal_threshold) continue;
 
                         const float depth_j = depth_avg[neighbor_idx];
-                        float depth_gate = std::abs(depth_i - depth_j) / std::max({depth_i, depth_j, EPS_SMALL});
+                        const float depth_gate = relative_depth_delta(depth_i, depth_j);
                         if (depth_gate > depth_threshold) continue;
 
                         const float var_j = std::max(EPS_SMALL, src[neighbor_idx]);
@@ -856,7 +1221,7 @@ void var_mean_denoise(const RenderConfig& config) {
 
                         const float dist2 = float(dx * dx + dy * dy);
                         const float spatial_w = 1.0f / (1.0f + dist2);
-                        const float w_j = spatial_w / std::max(EPS_SMALL, std::sqrt(var_j));
+                        const float w_j = spatial_w / std::max(EPS_SMALL, std::sqrt(var_i + var_j));
                         weighted_sum += w_j * var_j;
                         weight_sum += w_j;
                     }
@@ -865,9 +1230,10 @@ void var_mean_denoise(const RenderConfig& config) {
                 float neighbor_mean = var_i;
                 if (weight_sum > EPS_SMALL) neighbor_mean = weighted_sum / weight_sum;
 
-                float alpha_base = shrinkage_k / (var_i + shrinkage_k);
-                float alpha = std::clamp(alpha_base, 0.0f, 1.0f);
-                dst[idx] = lerp(var_i, neighbor_mean, 1.0f - alpha);
+                const float k_eff = shrinkage_k;
+                float blend = std::max(0.0f, var_i - neighbor_mean) / std::max(EPS_SMALL, var_i + neighbor_mean + k_eff);
+                blend = std::clamp(blend, 0.0f, 1.0f);
+                dst[idx] = lerp(var_i, neighbor_mean, blend);
             }
         }
     };
@@ -877,76 +1243,212 @@ void var_mean_denoise(const RenderConfig& config) {
         std::swap(curr, next);
     }
 
-    buffers.var_mean_denoised = std::move(curr);
-}
-
-std::vector<int> compute_adaptive_sample_counts(const RenderConfig& config) {
-    const int w = config.image_width;
-    const int h = config.image_height;
-    const int base_sample_count = config.adaptive_base_samples;
-    const int extra_sample_total = config.adaptive_spp * w * h;
-
-    std::vector<int> sample_counts(w * h, base_sample_count);
-    if (extra_sample_total <= 0) return sample_counts;
-
-    const float SIGMA_MAX = config.adaptive_sigma_max;
-
-    std::vector<float> importance(w * h, 0.0f);
-    float sum_importance = 0.0f;
-
-    std::vector<float> var_raw(w * h, 0.0f);
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)
 #endif
     for (int i = 0; i < w * h; ++i) {
-        float v = pixel_stats[i].variance();
-        if (!std::isfinite(v)) v = EPS_SMALL;
-        v = std::max(EPS_SMALL, v);
-        var_raw[i] = std::clamp(v, EPS_SMALL, SIGMA_MAX * SIGMA_MAX);
+        float raw = pixel_stats[i].variance();
+        if (!std::isfinite(raw)) raw = EPS_SMALL;
+        raw = std::max(EPS_SMALL, raw);
+        const int n = std::max(1, pixel_stats[i].n);
+        const float raw_var_mean = raw / float(n);
+        curr[i] = std::max(curr[i], raw_var_mean);
     }
 
+    buffers.var_mean_denoised = std::move(curr);
+    const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::high_resolution_clock::now() - start);
+    spdlog::info("Variance-of-mean denoise completed in {} ms", duration.count());
+}
 
+/// @brief Allocates one adaptive pass without exceeding its sample budget.
+/// @param config Render configuration controlling the allocation.
+/// @return Extra sample count for each pixel.
+std::vector<int> compute_adaptive_sample_counts(const RenderConfig& config) {
+    const auto start = std::chrono::high_resolution_clock::now();
+    const int w = config.image_width;
+    const int h = config.image_height;
+    const int extra_sample_total = config.adaptive_spp * w * h;
+    const int floor_per_pixel = std::clamp(config.adaptive_base_samples, 0, config.adaptive_spp);
+    const int reserved_samples = floor_per_pixel * w * h;
+
+    std::vector<int> sample_counts(w * h, floor_per_pixel);
+    auto save_extra_counts_debug = [&]() {
+        if (!config.debug_statmc_outputs) return;
+        std::vector<float> extra_counts_debug(w * h, 0.0f);
+        for (int i = 0; i < w * h; ++i) {
+            extra_counts_debug[i] = static_cast<float>(sample_counts[i]);
+        }
+        scalar_to_image(extra_counts_debug, w, h).save("debug_adaptive_extra_counts.hdr");
+    };
+    if (extra_sample_total <= 0) {
+        save_extra_counts_debug();
+        return sample_counts;
+    }
+
+    const float SIGMA_MAX = config.adaptive_sigma_max;
+    const auto& features = ensure_feature_cache(w, h);
+    const auto& normals_unit = features.normals_unit;
+    const auto& depth_avg = features.depth_avg;
+
+    std::vector<float> importance(w * h, 0.0f);
+    double sum_importance = 0.0;
+
+    std::vector<float> variance_source = buffers.var_mean_denoised;
+    if (variance_source.size() != static_cast<size_t>(w * h)) variance_source.assign(w * h, 0.0f);
 #ifdef _OPENMP
-#pragma omp parallel for schedule(static) reduction(+:sum_importance)
+#pragma omp parallel for schedule(static)
 #endif
     for (int i = 0; i < w * h; ++i) {
-        float var_mod = std::clamp(var_raw[i], EPS_SMALL, SIGMA_MAX * SIGMA_MAX);
-        float S = std::clamp(buffers.sensitivity_tiles.lookup(buffers.sensitivity_tiles.all, i, w), 0.0f, 1.0f);
-        float sensitivity_boost = 0.25f + 0.75f * S; // bias but avoid starving high-variance regions
-        float imp = std::sqrt(var_mod) * sensitivity_boost;
-        importance[i] = imp;
-        sum_importance += imp;
+        float raw = pixel_stats[i].variance();
+        if (!std::isfinite(raw)) raw = EPS_SMALL;
+        raw = std::max(EPS_SMALL, raw);
+        const int n = std::max(1, pixel_stats[i].n);
+        float denoised_sample_variance = variance_source[i] * float(n);
+        if (!std::isfinite(denoised_sample_variance) || denoised_sample_variance <= 0.0f) {
+            denoised_sample_variance = raw;
+        }
+        variance_source[i] = std::clamp(std::max(raw, denoised_sample_variance), EPS_SMALL, SIGMA_MAX * SIGMA_MAX);
     }
 
-    if (sum_importance <= 0.0f) return sample_counts;
+    if (config.debug_statmc_outputs) {
+        scalar_to_image(variance_source, w, h).save("debug_variance_source_adaptive.hdr");
+    }
 
-    const float inv_sum = 1.0f / sum_importance;
-
-    std::vector<std::pair<float, int>> remainders(w * h);
-    int assigned = 0;
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
     for (int i = 0; i < w * h; ++i) {
-        float desired = importance[i] * inv_sum * float(extra_sample_total);
-        int add = static_cast<int>(std::floor(desired));
+        importance[i] = std::sqrt(variance_source[i]);
+    }
+    sum_importance = std::accumulate(importance.begin(), importance.end(), 0.0);
+
+    const int radius = config.adaptive_importance_smoothing_radius;
+    if (radius > 0) {
+        std::vector<float> smoothed(importance.size(), 0.0f);
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                const int idx = y * w + x;
+                if (buffers.hit_count[idx] == 0) {
+                    smoothed[idx] = importance[idx];
+                    continue;
+                }
+                double accum = 0.0;
+                double weight_sum = 0.0;
+                for (int dy = -radius; dy <= radius; ++dy) {
+                    const int yy = y + dy;
+                    if (yy < 0 || yy >= h) continue;
+                    for (int dx = -radius; dx <= radius; ++dx) {
+                        const int xx = x + dx;
+                        if (xx < 0 || xx >= w) continue;
+                        const int nidx = yy * w + xx;
+                        if (buffers.hit_count[nidx] == 0) continue;
+                        const float spatial_w = 1.0f / (1.0f + float(dx * dx + dy * dy));
+                        const float normal_w = std::clamp((normals_unit[idx].dot(normals_unit[nidx]) + 1.0f) * 0.5f, 0.0f, 1.0f);
+                        const float depth_w = std::exp(-4.0f * relative_depth_delta(depth_avg[idx], depth_avg[nidx]));
+                        const double w_neighbor = static_cast<double>(spatial_w) *
+                                                  static_cast<double>(normal_w) *
+                                                  static_cast<double>(depth_w);
+                        accum += w_neighbor * static_cast<double>(importance[nidx]);
+                        weight_sum += w_neighbor;
+                    }
+                }
+                smoothed[idx] = (weight_sum > static_cast<double>(EPS_SMALL))
+                                    ? static_cast<float>(accum / weight_sum)
+                                    : importance[idx];
+            }
+        }
+        importance.swap(smoothed);
+        sum_importance = std::accumulate(importance.begin(), importance.end(), 0.0);
+    }
+
+    buffers.adaptive_importance = importance;
+
+    int remaining_samples = std::max(0, extra_sample_total - reserved_samples);
+    if (sum_importance <= 0.0 || remaining_samples <= 0) {
+        save_extra_counts_debug();
+        return sample_counts;
+    }
+
+    std::vector<float> desired_add(w * h, 0.0f);
+    std::vector<int> active_indices(w * h);
+    std::iota(active_indices.begin(), active_indices.end(), 0);
+    double remaining_importance = sum_importance;
+    const int max_extra_per_pixel = std::max(4, 8 * std::max(1, config.adaptive_spp));
+
+    while (!active_indices.empty() && remaining_samples > 0 && remaining_importance > static_cast<double>(EPS_SMALL)) {
+        bool clipped = false;
+        std::vector<int> next_active;
+        next_active.reserve(active_indices.size());
+        for (int idx : active_indices) {
+            const double share = static_cast<double>(importance[idx]) / remaining_importance;
+            const double desired = share * static_cast<double>(remaining_samples);
+            if (desired > static_cast<double>(max_extra_per_pixel)) {
+                desired_add[idx] = static_cast<float>(max_extra_per_pixel);
+                remaining_samples -= max_extra_per_pixel;
+                remaining_importance -= static_cast<double>(importance[idx]);
+                clipped = true;
+            } else {
+                next_active.push_back(idx);
+            }
+        }
+        if (!clipped) {
+            for (int idx : next_active) {
+                desired_add[idx] = static_cast<float>(
+                    static_cast<double>(importance[idx]) / remaining_importance *
+                    static_cast<double>(remaining_samples));
+            }
+            break;
+        }
+        active_indices.swap(next_active);
+    }
+
+    int assigned = 0;
+    std::vector<float> residual_weights(w * h, 0.0f);
+    double residual_sum = 0.0;
+    for (int i = 0; i < w * h; ++i) {
+        const int add = static_cast<int>(std::floor(desired_add[i]));
         sample_counts[i] += add;
         assigned += add;
-        remainders[i] = {desired - add, i};
+        residual_weights[i] = std::max(0.0f, desired_add[i] - float(add));
+        residual_sum += static_cast<double>(residual_weights[i]);
     }
 
-    int remaining = extra_sample_total - assigned;
-    if (remaining > 0) {
-        std::nth_element(remainders.begin(), remainders.begin() + std::min(w * h, remaining), remainders.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
-        std::sort(remainders.begin(), remainders.begin() + std::min(w * h, remaining), [](const auto& a, const auto& b) { return a.first > b.first; });
-
-        for (int i = 0; i < remaining && i < static_cast<int>(remainders.size()); ++i) sample_counts[remainders[i].second]++;
+    int remaining = std::max(0, extra_sample_total - reserved_samples - assigned);
+    if (remaining > 0 && residual_sum > static_cast<double>(EPS_SMALL)) {
+        const double offset = static_cast<double>(hash_to_unit_float(g_sampler_base_seed ^ 0x4d595df4u));
+        double cumulative = 0.0;
+        int cursor = 0;
+        for (int k = 0; k < remaining; ++k) {
+            const double target = ((static_cast<double>(k) + offset) / static_cast<double>(remaining)) * residual_sum;
+            while (cursor < w * h && cumulative + static_cast<double>(residual_weights[cursor]) < target) {
+                cumulative += static_cast<double>(residual_weights[cursor]);
+                ++cursor;
+            }
+            if (cursor < w * h) sample_counts[cursor]++;
+        }
     }
 
+    save_extra_counts_debug();
+
+    const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::high_resolution_clock::now() - start);
+    spdlog::info("Adaptive sample count computation completed in {} ms", duration.count());
     return sample_counts;
 }
 
+/// @brief Renders one adaptive pass using the current importance field.
+/// @param config Render configuration.
+/// @param camera Initialized camera.
 void render_image_adaptive(const RenderConfig& config, const Camera& camera) {
     if (config.adaptive_spp <= 0)  return;
 
-    spdlog::info("Adaptive render: extra spp = {}, base per-pixel = {}, passes = {}", config.adaptive_spp, config.adaptive_base_samples, config.adaptive_passes);
+    const int floor_per_pixel = std::clamp(config.adaptive_base_samples, 0, config.adaptive_spp);
+    spdlog::info("Adaptive render: extra spp = {}, minimum per-pixel = {} (budget-preserving), passes = {}",
+                 config.adaptive_spp, floor_per_pixel, config.adaptive_passes);
 #ifdef _OPENMP
     spdlog::info("OpenMP threads: {}", omp_get_max_threads());
 #endif
@@ -957,42 +1459,54 @@ void render_image_adaptive(const RenderConfig& config, const Camera& camera) {
 
     auto start = std::chrono::high_resolution_clock::now();
     std::atomic<int> rows_completed{0};
+    const int num_rpf_grids =
+#ifdef _OPENMP
+        omp_get_max_threads();
+#else
+        1;
+#endif
+    std::vector<rpf::Grid> local_rpf_grids(num_rpf_grids);
+    for (auto& grid : local_rpf_grids) {
+        grid.init(w, h, config.rpf_tile_size);
+        grid.reset();
+    }
 
 #ifdef _OPENMP
 #pragma omp parallel
     {
+        rpf::Grid& local_rpf_grid = local_rpf_grids[omp_get_thread_num()];
 #pragma omp for schedule(dynamic, 1)
 #endif
     for (int y = 0; y < h; ++y) {
         for (int x = 0; x < w; ++x) {
             int idx = y * w + x;
             int n_extra = extra_counts[idx];
+            Sampler::init_thread(pixel_sample_seed(idx, pixel_stats[idx].n));
             for (int s = 0; s < n_extra; ++s) {
-                const float u = (x + Sampler::next1d()) / float(w);
-                const float v = (y + Sampler::next1d()) / float(h);
+                const Vec2f pixel_u = Sampler::next2d();
+                const float u = (x + pixel_u.x()) / float(w);
+                const float v = (y + pixel_u.y()) / float(h);
 
-                Vec2f lens_sample = Sampler::sample_disk();
+                const Vec2f lens_u = Sampler::next2d();
+                const Vec2f lens_sample = camera.lens_radius > 0.0f
+                    ? Sampler::sample_disk(lens_u)
+                    : Vec2f::Zero();
                 rpf::Sample rpf_sample{};
-                rpf_sample.lens_u = lens_sample;
+                rpf_sample.capture_pixel(pixel_u);
+                if (camera.lens_radius > 0.0f) rpf_sample.capture_lens(lens_u);
 
                 Ray ray = camera.generate_ray(u, (1.0f - v), lens_sample);
                 Vec3f path_trace = mis_path_trace(ray, idx, &rpf_sample);
+                if (!path_trace.allFinite()) continue;
 
-                if (rpf_sample.valid) {
-                    const float sample_lum = calc_luminance(path_trace);
-                    if (std::isfinite(sample_lum)) {
-                        const int tile_idx = rpf_grid.id_from_pixel(x, y);
+                const float sample_lum = calc_luminance(path_trace);
 #ifdef _OPENMP
-#pragma omp critical
+                accumulate_rpf_sample_to_grid(local_rpf_grid, x, y, rpf_sample, sample_lum);
+#else
+                accumulate_rpf_sample_to_grid(local_rpf_grids[0], x, y, rpf_sample, sample_lum);
 #endif
-                        {
-                            auto& tile = rpf_grid.tiles[tile_idx];
-                            tile.brdf.add(rpf_sample.brdf_u.x(), rpf_sample.brdf_u.y(), sample_lum);
-                            tile.lens.add(rpf_sample.lens_u.x(), rpf_sample.lens_u.y(), sample_lum);
-                            tile.light.add(rpf_sample.light_u.x(), rpf_sample.light_u.y(), sample_lum);
-                            tile.rr.add(rpf_sample.rr_u, sample_lum);
-                        }
-                    }
+                if (rpf_sample.light_select_visibility_valid) {
+                    pixel_stats[idx].accumulate_light_visibility(rpf_sample.light_select_visible);
                 }
                 accumulate_sample(pixel_stats[idx], path_trace);
                 buffers.radiance(x, y) += path_trace;
@@ -1009,16 +1523,23 @@ void render_image_adaptive(const RenderConfig& config, const Camera& camera) {
     }
 #endif
 
+    merge_rpf_grids_into(rpf_grid, local_rpf_grids);
+
+    invalidate_postprocess_caches();
+
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
     spdlog::info("Adaptive rendering completed in {} ms", duration.count());
 }
 
-void render(const RenderConfig& config, const Camera& camera, const std::filesystem::path& output_path) {
+/// @brief Executes uniform rendering or the full StatMC/RPD pipeline.
+/// @param config Render configuration.
+/// @param camera Initialized camera.
+void render(const RenderConfig& config, const Camera& camera) {
     if (config.use_statmc) {
         render_image_statmc(config, camera);
 
-        for (int i = 0; i < config.adaptive_passes; ++i) {
+        for (int i = 0; i < config.adaptive_passes && config.adaptive_spp > 0; ++i) {
             statmc_denoise(config);
             var_mean_denoise(config);
             render_image_adaptive(config, camera);
@@ -1045,13 +1566,10 @@ int main(int argc, char** argv) {
     bool statmc_enable_cli = false;
     bool statmc_disable_cli = false;
     int rpf_tile_size_cli = -1;
-    int rpf_target_samples_cli = std::numeric_limits<int>::min();
-    int rpf_max_radius_cli = std::numeric_limits<int>::min();
     int color_window_radius_cli = std::numeric_limits<int>::min();
     float color_normal_thresh_cli = std::numeric_limits<float>::quiet_NaN();
     float color_depth_thresh_cli = std::numeric_limits<float>::quiet_NaN();
     float color_compat_alpha_cli = std::numeric_limits<float>::quiet_NaN();
-    float color_shrinkage_k_cli = std::numeric_limits<float>::quiet_NaN();
     float color_sigma_max_cli = std::numeric_limits<float>::quiet_NaN();
     int var_window_radius_cli = std::numeric_limits<int>::min();
     float var_normal_thresh_cli = std::numeric_limits<float>::quiet_NaN();
@@ -1063,28 +1581,24 @@ int main(int argc, char** argv) {
     int adaptive_spp_cli = std::numeric_limits<int>::min();
     float adaptive_sigma_max_cli = std::numeric_limits<float>::quiet_NaN();
     int adaptive_passes_cli = std::numeric_limits<int>::min();
+    int adaptive_importance_smoothing_radius_cli = std::numeric_limits<int>::min();
     float rpf_shrinkage_scale_cli = std::numeric_limits<float>::quiet_NaN();
-    float sensitivity_match_threshold_cli = std::numeric_limits<float>::quiet_NaN();
+    float rpf_confidence_samples_cli = std::numeric_limits<float>::quiet_NaN();
     std::string tonemap_cli;
     int samples_per_pixel_cli = std::numeric_limits<int>::min();
     std::optional<uint32_t> sampler_seed;
 
-    // Rendering / scene
     app.add_option("-c,--config", config_file, "Path to config YAML file")->required();
     app.add_option("-s,--scene", scene_name, "Name of the built-in scene to render (overrides config)");
     app.add_option("-o,--output", output_dir_cli, "Output directory (absolute or relative). Image saved as <dir>/<name>.png");
     app.add_option("--spp", samples_per_pixel_cli, "Override samples per pixel (>0)")->check(CLI::PositiveNumber);
-    // StatMC / RPF
     app.add_flag("--statmc", statmc_enable_cli, "Enable StatMC/RPF rendering");
     app.add_flag("--no-statmc", statmc_disable_cli, "Disable StatMC/RPF rendering");
-    app.add_option("--rpf-tile-size", rpf_tile_size_cli, "Tile size for RPF (StatMC)")->check(CLI::PositiveNumber);
-    app.add_option("--rpf-target-samples", rpf_target_samples_cli, "Target pooled samples per tile for RPF (-1 = auto)"); // manual validation to allow -1
-    app.add_option("--rpf-max-radius", rpf_max_radius_cli, "Max pooling radius (tiles) for RPF (-1 = auto)");
+    app.add_option("--rpf-tile-size", rpf_tile_size_cli, "Sensitivity support size for the overlapping RPF grid")->check(CLI::PositiveNumber);
     app.add_option("--color-window-radius", color_window_radius_cli, "Color window radius (pixels)")->check(CLI::PositiveNumber);
     app.add_option("--color-normal-thresh", color_normal_thresh_cli, "Color normal dot threshold (0,1]");
     app.add_option("--color-depth-thresh", color_depth_thresh_cli, "Color relative depth threshold (>=0)");
     app.add_option("--color-compat-alpha", color_compat_alpha_cli, "Color compatibility significance alpha (0,1)");
-    app.add_option("--color-shrinkage-k", color_shrinkage_k_cli, "Color shrinkage stabilizer (>0)");
     app.add_option("--color-sigma-max", color_sigma_max_cli, "Max stddev clamp for color variance (>0)");
     app.add_option("--var-window-radius", var_window_radius_cli, "Variance-of-mean window radius (pixels)")->check(CLI::PositiveNumber);
     app.add_option("--var-normal-thresh", var_normal_thresh_cli, "Variance-of-mean normal dot threshold (0,1]");
@@ -1092,12 +1606,13 @@ int main(int argc, char** argv) {
     app.add_option("--var-compat-sigma", var_compat_sigma_cli, "Variance-of-mean compatibility sigma (>0)");
     app.add_option("--var-shrinkage-k", var_shrinkage_k_cli, "Variance-of-mean shrinkage stabilizer (>0)");
     app.add_option("--var-iterations", var_iterations_cli, "Variance-of-mean smoothing iterations")->check(CLI::PositiveNumber);
-    app.add_option("--adaptive-base-samples", adaptive_base_samples_cli, "Baseline extra samples per pixel for adaptive refinement");
-    app.add_option("--adaptive-spp", adaptive_spp_cli, "Total extra samples (spp) for adaptive refinement");
+    app.add_option("--adaptive-base-samples", adaptive_base_samples_cli, "Minimum extra samples per pixel per adaptive pass, taken from the adaptive_spp budget");
+    app.add_option("--adaptive-spp", adaptive_spp_cli, "Extra samples per adaptive pass (spp)");
     app.add_option("--adaptive-sigma-max", adaptive_sigma_max_cli, "Max sigma clamp for adaptive importance (>0)");
     app.add_option("--adaptive-passes", adaptive_passes_cli, "Number of adaptive refinement passes (>=0)");
-    app.add_option("--rpf-shrinkage-scale", rpf_shrinkage_scale_cli, "Scale factor for shrinkage based on RP sensitivity (k_eff = k * (1 + scale * f_rp))");
-    app.add_option("--sensitivity-match-thresh", sensitivity_match_threshold_cli, "Reject neighbors when |Δs_lens| exceeds this (0 disables)");
+    app.add_option("--adaptive-importance-radius", adaptive_importance_smoothing_radius_cli, "Edge-aware smoothing radius for adaptive importance (>=0)");
+    app.add_option("--rpf-shrinkage-scale", rpf_shrinkage_scale_cli, "Scale RP-based feature gating; zero disables all RPD influence on reconstruction");
+    app.add_option("--rpf-confidence-samples", rpf_confidence_samples_cli, "Confidence sample mass for RP sensitivity shrinkage (>0)");
     app.add_option("--tonemap", tonemap_cli, "Tonemapping preset: aces | agx | agx-golden | agx-punchy");
     app.add_option("--seed", sampler_seed, "Optional RNG seed for the sampler");
 
@@ -1166,22 +1681,6 @@ int main(int argc, char** argv) {
         spdlog::error("RPF tile size must be positive");
         return 1;
     }
-    int rpf_target_samples = render_config.rpf_target_samples;
-    if (rpf_target_samples_cli != std::numeric_limits<int>::min()) {
-        rpf_target_samples = rpf_target_samples_cli;
-    }
-    if (rpf_target_samples == 0 || rpf_target_samples < -1) {
-        spdlog::error("rpf_target_samples must be -1 or positive");
-        return 1;
-    }
-    int rpf_max_radius = render_config.rpf_max_radius;
-    if (rpf_max_radius_cli != std::numeric_limits<int>::min()) {
-        rpf_max_radius = rpf_max_radius_cli;
-    }
-    if (rpf_max_radius < 0) {
-        spdlog::error("rpf_max_radius must be non-negative");
-        return 1;
-    }
     int color_window_radius = render_config.color_window_radius;
     if (color_window_radius_cli != std::numeric_limits<int>::min()) {
         color_window_radius = color_window_radius_cli;
@@ -1203,11 +1702,6 @@ int main(int argc, char** argv) {
     float color_compat_alpha = std::isnan(color_compat_alpha_cli) ? render_config.color_compat_alpha : color_compat_alpha_cli;
     if (color_compat_alpha <= 0.0f || color_compat_alpha >= 1.0f) {
         spdlog::error("color_compat_alpha must be in (0,1)");
-        return 1;
-    }
-    float color_shrinkage_k = std::isnan(color_shrinkage_k_cli) ? render_config.color_shrinkage_k : color_shrinkage_k_cli;
-    if (color_shrinkage_k <= 0.0f) {
-        spdlog::error("color_shrinkage_k must be positive");
         return 1;
     }
     float color_sigma_max = std::isnan(color_sigma_max_cli) ? render_config.color_sigma_max : color_sigma_max_cli;
@@ -1264,8 +1758,16 @@ int main(int argc, char** argv) {
     if (adaptive_passes_cli != std::numeric_limits<int>::min()) {
         adaptive_passes = adaptive_passes_cli;
     }
+    int adaptive_importance_smoothing_radius = render_config.adaptive_importance_smoothing_radius;
+    if (adaptive_importance_smoothing_radius_cli != std::numeric_limits<int>::min()) {
+        adaptive_importance_smoothing_radius = adaptive_importance_smoothing_radius_cli;
+    }
     if (adaptive_base_samples < 0 || adaptive_spp < 0) {
         spdlog::error("adaptive_base_samples and adaptive_spp must be non-negative");
+        return 1;
+    }
+    if (adaptive_base_samples > adaptive_spp) {
+        spdlog::error("adaptive_base_samples cannot exceed adaptive_spp");
         return 1;
     }
     if (adaptive_sigma_max <= 0.0f) {
@@ -1276,14 +1778,18 @@ int main(int argc, char** argv) {
         spdlog::error("adaptive_passes must be non-negative");
         return 1;
     }
+    if (adaptive_importance_smoothing_radius < 0) {
+        spdlog::error("adaptive_importance_smoothing_radius must be non-negative");
+        return 1;
+    }
     float rpf_shrinkage_scale = std::isnan(rpf_shrinkage_scale_cli) ? render_config.rpf_shrinkage_scale : rpf_shrinkage_scale_cli;
     if (rpf_shrinkage_scale < 0.0f) {
         spdlog::error("rpf_shrinkage_scale must be non-negative");
         return 1;
     }
-    float sensitivity_match_threshold = std::isnan(sensitivity_match_threshold_cli) ? render_config.sensitivity_match_threshold : sensitivity_match_threshold_cli;
-    if (sensitivity_match_threshold < 0.0f) {
-        spdlog::error("sensitivity_match_threshold must be non-negative");
+    float rpf_confidence_samples = std::isnan(rpf_confidence_samples_cli) ? render_config.rpf_confidence_samples : rpf_confidence_samples_cli;
+    if (rpf_confidence_samples <= 0.0f) {
+        spdlog::error("rpf_confidence_samples must be positive");
         return 1;
     }
     std::string tonemap_name = render_config.tonemap;
@@ -1303,13 +1809,10 @@ int main(int argc, char** argv) {
 
     render_config.use_statmc = use_statmc;
     render_config.rpf_tile_size = rpf_tile_size;
-    render_config.rpf_target_samples = rpf_target_samples;
-    render_config.rpf_max_radius = rpf_max_radius;
     render_config.color_window_radius = color_window_radius;
     render_config.color_normal_threshold = statmc_normal_thresh;
     render_config.color_depth_threshold = statmc_depth_thresh;
     render_config.color_compat_alpha = color_compat_alpha;
-    render_config.color_shrinkage_k = color_shrinkage_k;
     render_config.color_sigma_max = color_sigma_max;
     render_config.var_window_radius = var_window_radius;
     render_config.var_normal_threshold = var_normal_thresh;
@@ -1321,9 +1824,10 @@ int main(int argc, char** argv) {
     render_config.adaptive_spp = adaptive_spp;
     render_config.adaptive_sigma_max = adaptive_sigma_max;
     render_config.adaptive_passes = adaptive_passes;
+    render_config.adaptive_importance_smoothing_radius = adaptive_importance_smoothing_radius;
     render_config.samples_per_pixel = samples_per_pixel;
     render_config.rpf_shrinkage_scale = rpf_shrinkage_scale;
-    render_config.sensitivity_match_threshold = sensitivity_match_threshold;
+    render_config.rpf_confidence_samples = rpf_confidence_samples;
 
     spdlog::info("Image: {}x{}", render_config.image_width, render_config.image_height);
     spdlog::info("Samples per pixel: {}", render_config.samples_per_pixel);
@@ -1363,7 +1867,6 @@ int main(int argc, char** argv) {
         spdlog::info("Using random sampler seed {}", seed);
     }
     g_sampler_base_seed = seed;
-    Sampler::init(seed);
 
     output_dir_path = output_dir_path.lexically_normal();
 
@@ -1401,7 +1904,7 @@ int main(int argc, char** argv) {
 
     const std::filesystem::path output_path = output_dir_path / output_dir_name;
 
-    render(render_config, camera, output_path);
+    render(render_config, camera);
 
     if (output_buffers(buffers, output_path.string(), tonemap_preset, render_config.use_statmc)) {
         spdlog::info("Successfully saved output to: {}", output_dir_path.string());

@@ -9,12 +9,10 @@
 
 namespace scenes {
 
-// Material showcase scene
 inline Scene make_material_showcase() {
     Scene scene;
     scene.environment_color = Vec3f(0.05f, 0.05f, 0.05f);
 
-    // Define materials
     Lambertian red_diffuse{Vec3f(0.8f, 0.1f, 0.1f)};
     Lambertian green_diffuse{Vec3f(0.1f, 0.8f, 0.1f)};
     Lambertian blue_diffuse{Vec3f(0.1f, 0.1f, 0.8f)};
@@ -32,7 +30,6 @@ inline Scene make_material_showcase() {
     Microfacet jade_glossy = Jade;
     Microfacet silver_mirror = Silver;
 
-    // Register materials
     const int red_id = scene.add_material(Material{red_diffuse});
     const int green_id = scene.add_material(Material{green_diffuse});
     const int blue_id = scene.add_material(Material{blue_diffuse});
@@ -47,13 +44,11 @@ inline Scene make_material_showcase() {
     const int back_wall_id = scene.add_material(Material{Lambertian{Vec3f(0.6f, 0.6f, 0.65f)}});
     const int light_mat_id = scene.add_material(Material{Lambertian{Vec3f(1.0f, 1.0f, 1.0f)}});
 
-    // Add ground plane
     auto ground = make_ground_plane(30.0f, 0.0f, ground_id);
     for (const auto& tri : ground) {
         scene.add_triangle(tri);
     }
 
-    // Add back wall
     Vec3f wall_v0(-10.0f, 0.0f, 5.0f);
     Vec3f wall_v1(10.0f, 0.0f, 5.0f);
     Vec3f wall_v2(10.0f, 8.0f, 5.0f);
@@ -62,7 +57,6 @@ inline Scene make_material_showcase() {
     scene.add_triangle(make_triangle(wall_v0, wall_v1, wall_v2, back_wall_id));
     scene.add_triangle(make_triangle(wall_v0, wall_v2, wall_v3, back_wall_id));
 
-    // Arrange 9 spheres in a 3x3 grid
     const float sphere_radius = 0.6f;
     const float sphere_y = sphere_radius;
 
@@ -88,9 +82,6 @@ inline Scene make_material_showcase() {
         }
     }
 
-    // Studio lighting: key light + fill light + rim light
-
-    // Key light
     Vec3f key_origin(-3.0f, 4.0f, -2.0f);
     Vec3f key_u(1.5f, 0.0f, 0.0f);
     Vec3f key_v(0.0f, 0.0f, 1.5f);
@@ -111,7 +102,6 @@ inline Scene make_material_showcase() {
     scene.link_triangle_to_light(key_tri1, key_light_idx);
     scene.link_triangle_to_light(key_tri2, key_light_idx);
 
-    // Fill light
     Vec3f fill_origin(3.0f, 3.5f, -1.0f);
     Vec3f fill_u(0.8f, 0.0f, 0.0f);
     Vec3f fill_v(0.0f, 0.0f, 0.8f);
@@ -132,7 +122,6 @@ inline Scene make_material_showcase() {
     scene.link_triangle_to_light(fill_tri1, fill_light_idx);
     scene.link_triangle_to_light(fill_tri2, fill_light_idx);
 
-    // Rim light (point light)
     PointLight rim_light;
     rim_light.position = Vec3f(0.0f, 3.0f, 4.0f);
     rim_light.intensity = Vec3f(15.0f, 15.0f, 15.0f);
@@ -141,4 +130,4 @@ inline Scene make_material_showcase() {
     return scene;
 }
 
-} // namespace scenes
+}

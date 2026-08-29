@@ -2,6 +2,7 @@
 #include "common.h"
 #include "triangle.h"
 #include "ray.h"
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <numeric>
@@ -19,28 +20,6 @@ struct BoundingBox {
         max_point = max_point.cwiseMax(point);
         
         return *this;
-    }
-
-    Vec3f get_center() const { return 0.5f * (min_point + max_point); }
-
-    Vec3f get_corner(int index) const { 
-        Vec3f res;
-        for (size_t i = 0; i < 3; ++i){
-            res[i] = (index & (1 << i)) ? max_point[i] : min_point[i];
-        }
-
-        return res;
-    }
-
-    bool overlaps_triangle(const Triangle& tri) const {
-        Vec3f tri_min = tri.v0().cwiseMin(tri.v1().cwiseMin(tri.v2()));
-        Vec3f tri_max = tri.v0().cwiseMax(tri.v1().cwiseMax(tri.v2()));
-
-        return (
-            tri_min.x() <= max_point.x() && tri_max.x() >= min_point.x() &&
-            tri_min.y() <= max_point.y() && tri_max.y() >= min_point.y() &&
-            tri_min.z() <= max_point.z() && tri_max.z() >= min_point.z()
-        );
     }
 
     std::tuple<bool, float, float> ray_intersect(const Ray& ray) const {
@@ -76,13 +55,13 @@ struct BVH {
     std::vector<Vec3f> triangle_centroids;
     int root = -1;
 
-    /// @brief Traverses the BVH starting from root
-    /// @param triangles Array of triangles
-    /// @param root Starting node
-    /// @param ray Ray to trace
-    /// @param tMax Max dist along the ray
-    /// @param shadow_ray If shadow_ray then we only care about whether it hits or not
-    /// @return 
+    /// @brief Traverses the BVH for a closest-hit or occlusion query.
+    /// @param triangles Triangles referenced by the BVH leaves.
+    /// @param root Root node index.
+    /// @param ray Ray to trace.
+    /// @param tMax Maximum accepted distance.
+    /// @param shadow_ray Whether traversal may stop at the first hit.
+    /// @return Hit flag, distance, and triangle index.
     std::tuple<bool, float, uint32_t> traverse_bvh(const std::vector<Triangle>& triangles, int root, const Ray& ray, const float tMax, const bool shadow_ray) const {
         uint32_t closest_tri = UINT32_MAX;
 
@@ -96,18 +75,17 @@ struct BVH {
 
         float closest_t = effectiveMax;
 
-        std::vector<std::pair<int, float>> stack;
-        stack.reserve(MAX_DEPTH);
+        std::array<std::pair<int, float>, MAX_DEPTH + 2> stack;
+        size_t stack_size = 0;
 
         auto [root_hit, root_t_near, root_t_far] = nodes[root].bounds.ray_intersect(ray);
         if (!root_hit || root_t_near > effectiveMax || root_t_far < EPS_SMALL) {
             return { false, tMax, closest_tri };
         }
-        stack.emplace_back(root, root_t_near);
+        stack[stack_size++] = {root, root_t_near};
 
-        while (!stack.empty()) {
-            auto [node_index, t_near] = stack.back();
-            stack.pop_back();
+        while (stack_size > 0) {
+            auto [node_index, t_near] = stack[--stack_size];
 
             if (t_near > closest_t) continue;
 
@@ -142,14 +120,14 @@ struct BVH {
                 consider_child(node.right);
 
                 if (child_count == 1) {
-                    stack.push_back(child_entries[0]);
+                    stack[stack_size++] = child_entries[0];
                 } else if (child_count == 2) {
                     if (child_entries[0].second < child_entries[1].second) {
-                        stack.push_back(child_entries[1]);
-                        stack.push_back(child_entries[0]);
+                        stack[stack_size++] = child_entries[1];
+                        stack[stack_size++] = child_entries[0];
                     } else {
-                        stack.push_back(child_entries[0]);
-                        stack.push_back(child_entries[1]);
+                        stack[stack_size++] = child_entries[0];
+                        stack[stack_size++] = child_entries[1];
                     }
                 }
             }
@@ -247,20 +225,21 @@ struct BVH {
     }
 };
 
-/// @brief Finds the closest triangle hit for the given ray and BVH
-/// @param ray Ray to trace. Make sure the origin is offset if needed
-/// @param bvh BVH built over `triangles`
-/// @param triangles Array of triangles
-/// @return
+/// @brief Finds the closest triangle intersected by a ray.
+/// @param ray Ray to trace.
+/// @param bvh Acceleration structure for triangles.
+/// @param triangles Scene triangles.
+/// @return Hit flag, distance, and triangle index.
 static std::tuple<bool, float, uint32_t> closest_hit(const Ray& ray, const BVH& bvh, const std::vector<Triangle>& triangles) {
     return bvh.traverse_bvh(triangles, bvh.root, ray, std::numeric_limits<float>::infinity(), false);
 }
 
-/// @brief Tests whether the ray hits any triangle in the BVH
-/// @param ray Ray to trace. Make sure the origin is offset if needed
-/// @param bvh BVH built over `triangles`
-/// @param triangles Array of triangles
-/// @return True if any intersection occurs before tMax, false otherwise
+/// @brief Tests whether a ray is occluded by any triangle.
+/// @param ray Ray to trace.
+/// @param tMax Maximum accepted distance.
+/// @param bvh Acceleration structure for triangles.
+/// @param triangles Scene triangles.
+/// @return True when a triangle intersects before tMax.
 static bool any_hit(const Ray& ray, const float tMax, const BVH& bvh, const std::vector<Triangle>& triangles) {
     auto [hit, t, tri] = bvh.traverse_bvh(triangles, bvh.root, ray, tMax, true);
     return hit;
@@ -269,10 +248,10 @@ static bool any_hit(const Ray& ray, const float tMax, const BVH& bvh, const std:
 #include "sphere.h"
 #include "primitive_type.h"
 
-/// @brief Finds the closest sphere hit for the given ray
-/// @param ray Ray to trace
-/// @param spheres Array of spheres
-/// @return (hit, t, sphere_index, normal)
+/// @brief Finds the closest sphere intersected by a ray.
+/// @param ray Ray to trace.
+/// @param spheres Scene spheres.
+/// @return Hit flag, distance, sphere index, and surface normal.
 static std::tuple<bool, float, uint32_t, Vec3f> closest_sphere_hit(
     const Ray& ray,
     const std::vector<Sphere>& spheres
@@ -295,11 +274,11 @@ static std::tuple<bool, float, uint32_t, Vec3f> closest_sphere_hit(
     return {hit_anything, closest_t, closest_sphere, closest_normal};
 }
 
-/// @brief Tests whether the ray hits any sphere
-/// @param ray Ray to trace
-/// @param tMax Maximum distance to check
-/// @param spheres Array of spheres
-/// @return True if any intersection occurs before tMax
+/// @brief Tests whether a ray is occluded by any sphere.
+/// @param ray Ray to trace.
+/// @param tMax Maximum accepted distance.
+/// @param spheres Scene spheres.
+/// @return True when a sphere intersects before tMax.
 static bool any_sphere_hit(
     const Ray& ray,
     const float tMax,
@@ -316,23 +295,20 @@ static bool any_sphere_hit(
     return false;
 }
 
-/// @brief Combined closest hit test for both triangles and spheres
-/// @return (hit, t, primitive_type, primitive_index, normal)
-///         if primitive_type==Triangle, use triangle normal from triangles[index]
-///         if primitive_type==Sphere, normal is provided directly
+/// @brief Finds the closest triangle or sphere intersection.
+/// @param ray Ray to trace.
+/// @param bvh Acceleration structure for triangles.
+/// @param triangles Scene triangles.
+/// @param spheres Scene spheres.
+/// @return Hit flag, distance, primitive type, primitive index, and sphere normal.
 static std::tuple<bool, float, PrimitiveType, uint32_t, Vec3f> closest_hit_combined(
     const Ray& ray,
     const BVH& bvh,
     const std::vector<Triangle>& triangles,
     const std::vector<Sphere>& spheres
 ) {
-    // Test triangles
     auto [tri_hit, tri_t, tri_idx] = closest_hit(ray, bvh, triangles);
-
-    // Test spheres
     auto [sphere_hit, sphere_t, sphere_idx, sphere_normal] = closest_sphere_hit(ray, spheres);
-
-    // Determine which is closer
     if (tri_hit && sphere_hit) {
         if (tri_t < sphere_t) {
             return {true, tri_t, PrimitiveType::Triangle, tri_idx, Vec3f::Zero()};
@@ -348,7 +324,13 @@ static std::tuple<bool, float, PrimitiveType, uint32_t, Vec3f> closest_hit_combi
     }
 }
 
-/// @brief Combined any hit test for both triangles and spheres
+/// @brief Tests whether any scene primitive occludes a ray.
+/// @param ray Ray to trace.
+/// @param tMax Maximum accepted distance.
+/// @param bvh Acceleration structure for triangles.
+/// @param triangles Scene triangles.
+/// @param spheres Scene spheres.
+/// @return True when any primitive intersects before tMax.
 static bool any_hit_combined(
     const Ray& ray,
     const float tMax,

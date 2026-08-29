@@ -25,12 +25,13 @@ struct Triangle {
         return !emission.isZero(EPS_SMALL);
     }
 
-    /// @brief WaterTight Ray/Triangle Intersection: http://jcgt.org/published/0002/01/05/paper.pdf
-    /// @param tri 
-    /// @param ray 
-    /// @param t_min 
-    /// @param t_max 
-    /// @return  
+    /// @brief Performs a watertight ray-triangle intersection.
+    /// @param tri Triangle to test.
+    /// @param ray Ray in world space.
+    /// @param t_min Minimum accepted ray distance.
+    /// @param t_max Maximum accepted ray distance.
+    /// @return Hit flag and distance along the ray.
+    /// @see http://jcgt.org/published/0002/01/05/paper.pdf
     static std::tuple<bool, float> ray_triangle_intersect(const Triangle& tri, const Ray& ray, float t_min, float t_max){
         const Vec3f abs_direction = ray.direction.cwiseAbs();
         unsigned int axis = 0;

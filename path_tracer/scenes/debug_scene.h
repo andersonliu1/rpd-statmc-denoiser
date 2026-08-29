@@ -56,4 +56,4 @@ inline Scene make_debug_scene() {
     return scene;
 }
 
-} // namespace scenes
+}
