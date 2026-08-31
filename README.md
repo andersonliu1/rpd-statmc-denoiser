@@ -57,19 +57,19 @@ Arguments:
 - `--tonemap <preset>`: Tonemapping preset (`aces`, `agx`, `agx-golden`, `agx-punchy`). Overrides YAML `tonemap`.
 - `--statmc` / `--no-statmc`: Enable or disable StatMC/RPF rendering (overrides YAML `statmc_enabled`).
 - `--rpf-tile-size <N>`: Sensitivity support size for the overlapping RPF grid.
-- `--rpf-shrinkage-scale <T>`: Scale RP-based feature gating; zero is a true RPD-off ablation.
+- `--rpf-shrinkage-scale <T>`: Scale RPD-guided StatMC compatibility relaxation; zero is a true RPD-off ablation.
 - `--rpf-confidence-samples <T>`: Confidence sample mass for sensitivity shrinkage (>0).
 - `--color-window-radius <N>`: Color window radius (pixels).
 - `--color-normal-thresh <T>`: Color normal dot threshold (0,1].
 - `--color-depth-thresh <T>`: Color relative depth threshold (>=0).
 - `--color-compat-alpha <T>`: Color compatibility significance alpha (0,1).
 - `--color-sigma-max <T>`: Max stddev clamp for color variance (>0).
-- `--var-window-radius <N>`: Variance-of-mean window radius (pixels).
-- `--var-normal-thresh <T>`: Variance-of-mean normal dot threshold (0,1].
-- `--var-depth-thresh <T>`: Variance-of-mean relative depth threshold (>=0).
-- `--var-compat-sigma <T>`: Variance-of-mean compatibility sigma (>0).
-- `--var-shrinkage-k <T>`: Variance-of-mean shrinkage stabilizer (>0).
-- `--var-iterations <N>`: Variance-of-mean smoothing iterations.
+- `--var-window-radius <N>`: Sample-variance window radius (pixels).
+- `--var-normal-thresh <T>`: Sample-variance normal dot threshold (0,1].
+- `--var-depth-thresh <T>`: Sample-variance relative depth threshold (>=0).
+- `--var-compat-sigma <T>`: Sample-variance relative compatibility threshold (>0).
+- `--var-shrinkage-k <T>`: Sample-variance shrinkage stabilizer (>0).
+- `--var-iterations <N>`: Sample-variance smoothing iterations.
 - `--adaptive-base-samples <N>`: Minimum extra samples per pixel per adaptive pass, taken from the `adaptive_spp` budget.
 - `--adaptive-spp <N>`: Extra samples (spp) allocated by each adaptive pass.
 - `--adaptive-sigma-max <T>`: Max sigma clamp for adaptive importance (>0).
@@ -100,23 +100,24 @@ adaptive_passes: 3
 
 Current StatMC/RPF implementation notes:
 - Random-parameter dependency diagnostics are accumulated on an overlapping low-resolution grid and reconstructed per pixel with bilinear interpolation.
-- Recorded random inputs stay in their canonical `[0,1]` sampling domain and use the first valid occurrence. They include active lens samples, non-delta BRDF samples, categorical light selection, light UV, nonzero-environment direction, binary visibility, and binary Russian-roulette survival. Node-local full raster sample position is recorded separately as the screen-space comparator.
-- Radiance dependency uses a bias-adjusted 4x4 binned explained-variance score. Binary visibility uses bias-corrected binned mutual information. Weighted estimates and confidence use effective sample mass.
-- Every recorded dimension is compared against full-path sample luminance. Random sensitivity is normalized against screen-position sensitivity, matching RPF's distinction between stochastic variation and image detail. These values are nonlinear dependency diagnostics, not additive variance contributions or direct estimates of converged pixel error.
-- Color denoising uses per-channel square-root-domain Welch statistics, soft compatibility weights, and a conservative variance floor. Reliable light dependency adds a soft beta-binomial visibility-compatibility weight, while RPD never reduces the variance estimate.
-- Adaptive sampling uses `max(raw, denoised)` variance-of-mean, a budget-preserving per-pixel minimum allocation, and `sqrt(variance)`-scaled importance with edge-aware smoothing.
+- Recorded random inputs stay in their canonical `[0,1]` sampling domain and use the first valid occurrence. They include active lens samples, non-delta BRDF samples, categorical light selection, light UV, nonzero-environment direction, and binary Russian-roulette survival. Node-local full raster sample position is recorded separately as the screen-space comparator.
+- Radiance dependency uses a bias-adjusted 4x4 binned explained-variance score. Weighted estimates and confidence use effective sample mass.
+- Every recorded dimension is compared against full-path sample luminance. Random sensitivity is normalized against a screen-position dependency estimated from the same conditional sample subset, matching RPF's distinction between stochastic variation and image detail without mixing path populations. These values are nonlinear dependency diagnostics, not additive variance contributions or direct estimates of converged pixel error.
+- Color denoising uses per-channel square-root-domain Welch statistics, soft compatibility weights, and a conservative variance floor. RPD uniformly relaxes the Welch compatibility score only when both pixels share reliable dependency on the same random dimension; it does not add parameter-specific gates or reduce variance.
+- Variance stabilization only raises locally underestimated per-sample variance values. This keeps neighboring estimates in the same units after adaptive passes with unequal sample counts. Adaptive sampling then uses `max(raw, stabilized)` variance, a budget-preserving per-pixel minimum allocation, and `sqrt(variance)`-scaled importance with edge-aware smoothing.
+- Spatial reconstruction is a lower-MSE, finite-sample biased estimator, not an unbiased Monte Carlo estimator. The unfiltered adaptive result is preserved as `*_raw.{png,hdr}` for bias and convergence checks, but pilot reuse means that result is not guaranteed to be finite-sample unbiased either; the equal-spp uniform baseline remains the unbiased control.
 - Pixel/sample-derived RNG seeds make renders independent of OpenMP row scheduling.
 - Render-time RPF accumulation is thread-local and merged by grid node in parallel after each sampling phase.
-- The renderer logs per-stage timings for `recompute_sensitivity`, `statmc_denoise`, `var_mean_denoise`, `compute_adaptive_sample_counts`, and `render_image_adaptive`.
+- The renderer logs per-stage timings for `recompute_sensitivity`, `statmc_denoise`, `variance_denoise`, `compute_adaptive_sample_counts`, and `render_image_adaptive`.
 
 StatMC outputs:
 - Always written for every render:
   `<leaf>.png`, `<leaf>.hdr`, `<leaf>_albedo.hdr`, `<leaf>_normal.hdr`, `<leaf>_worldpos.hdr`, `<leaf>_depth.hdr`.
 - Written when `statmc_enabled: true` or `--statmc` is active:
-  `*_sensitivity.hdr`, per-dimension `*_sensitivity_{pixel,brdf,lens,light,environment,rr}.hdr`, `*_sensitivity_confidence.hdr`, `*_sensitivity_gradient.hdr`, `*_light_visibility.hdr`, `*_uncertainty.hdr`, `*_alpha.hdr`, `*_vardenoised.hdr`, `*_adaptive_importance.hdr`, and `*_sample_fraction.hdr`.
+  `*_raw.png`, `*_raw.hdr`, `*_sensitivity.hdr`, per-dimension `*_sensitivity_{pixel,brdf,lens,light,light_uv,light_select,environment,rr}.hdr` (screen dependency plus reliable random dependencies; `light` is the aggregate view), `*_sensitivity_confidence.hdr`, `*_sensitivity_gradient.hdr`, `*_uncertainty.hdr`, `*_alpha.hdr`, `*_vardenoised.hdr`, `*_adaptive_importance.hdr`, and `*_sample_fraction.hdr`.
   This also includes `*_var_total.hdr`, `*_var_eff.hdr`, and `*_var_ratio.hdr`.
 - If `debug_statmc_outputs: true`, extra debug HDRs are written into the current working directory:
-  `debug_neighbors.hdr`, `debug_alpha.hdr`, `debug_var_total.hdr`, `debug_var_eff.hdr`, `debug_var_ratio.hdr`, `debug_weight_sum.hdr`, `debug_neff.hdr`, `debug_sensitivity_all.hdr`, `debug_sensitivity_pixel.hdr`, `debug_sensitivity_brdf.hdr`, `debug_sensitivity_lens.hdr`, `debug_sensitivity_light.hdr`, `debug_sensitivity_environment.hdr`, `debug_sensitivity_rr.hdr`, `debug_sensitivity_confidence.hdr`, `debug_sensitivity_gradient.hdr`, `debug_reliability_sampling.hdr`, `debug_reliability_denoise.hdr`, `debug_variance_source_adaptive.hdr`, `debug_adaptive_extra_counts.hdr`.
+  `debug_neighbors.hdr`, `debug_alpha.hdr`, `debug_var_total.hdr`, `debug_var_eff.hdr`, `debug_var_ratio.hdr`, `debug_weight_sum.hdr`, `debug_neff.hdr`, `debug_sensitivity_all.hdr`, `debug_sensitivity_pixel.hdr`, `debug_sensitivity_brdf.hdr`, `debug_sensitivity_lens.hdr`, `debug_sensitivity_light.hdr`, `debug_sensitivity_light_uv.hdr`, `debug_sensitivity_light_select.hdr`, `debug_sensitivity_environment.hdr`, `debug_sensitivity_rr.hdr`, `debug_sensitivity_confidence.hdr`, `debug_sensitivity_gradient.hdr`, `debug_reliability_base.hdr`, `debug_reliability_denoise.hdr`, `debug_variance_source_adaptive.hdr`, `debug_adaptive_extra_counts.hdr`.
 
 Timing sweep helper:
 
@@ -135,10 +136,16 @@ This helper prints CSV rows with wall time and summed stage timings for render, 
 ### Reproducible paper evaluation
 
 Use `paper_eval.sh` to render one scene's paired seed matrix for uniform sampling,
-corrected StatMC with RPD disabled, and corrected StatMC with RPD enabled. It writes
+raw variance-guided adaptive sampling, corrected StatMC with RPD disabled, and
+corrected StatMC with RPD enabled. It writes
 linear HDR RMSE/NRMSE, local log-luminance SSIM, log-gradient NRMSE, PNG metrics,
 wall times, paired 95% confidence intervals, an independent-reference noise check,
 residuals, ready-named paper images, the source config, and the Git revision.
+The suite scores the raw adaptive output against both references and verifies that
+RPD-on and RPD-off runs have byte-identical raw HDR paths, so the ablation changes
+reconstruction rather than sample allocation.
+The adaptive-raw row shares the StatMC no-RPD render wall time because it is an
+intermediate output; that row does not measure standalone reconstruction overhead.
 
 ```bash
 scripts/paper_eval.sh \
