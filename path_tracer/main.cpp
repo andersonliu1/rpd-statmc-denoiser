@@ -56,7 +56,6 @@ struct SensitivityImageCache {
     int width = 0;
     int height = 0;
     std::vector<float> all;
-    std::vector<float> all_conf;
     std::vector<float> pixel;
     std::vector<float> pixel_conf;
     std::vector<float> brdf;
@@ -65,6 +64,10 @@ struct SensitivityImageCache {
     std::vector<float> lens_conf;
     std::vector<float> light;
     std::vector<float> light_conf;
+    std::vector<float> light_uv;
+    std::vector<float> light_uv_conf;
+    std::vector<float> light_select;
+    std::vector<float> light_select_conf;
     std::vector<float> environment;
     std::vector<float> environment_conf;
     std::vector<float> rr;
@@ -124,7 +127,6 @@ static const SensitivityImageCache& ensure_sensitivity_cache(int w, int h) {
     g_sensitivity_cache.width = w;
     g_sensitivity_cache.height = h;
     g_sensitivity_cache.all = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.all, w, h);
-    g_sensitivity_cache.all_conf = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.all_conf, w, h);
     g_sensitivity_cache.pixel = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.pixel, w, h);
     g_sensitivity_cache.pixel_conf = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.pixel_conf, w, h);
     g_sensitivity_cache.brdf = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.brdf, w, h);
@@ -133,6 +135,10 @@ static const SensitivityImageCache& ensure_sensitivity_cache(int w, int h) {
     g_sensitivity_cache.lens_conf = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.lens_conf, w, h);
     g_sensitivity_cache.light = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.light, w, h);
     g_sensitivity_cache.light_conf = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.light_conf, w, h);
+    g_sensitivity_cache.light_uv = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.light_uv, w, h);
+    g_sensitivity_cache.light_uv_conf = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.light_uv_conf, w, h);
+    g_sensitivity_cache.light_select = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.light_select, w, h);
+    g_sensitivity_cache.light_select_conf = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.light_select_conf, w, h);
     g_sensitivity_cache.environment = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.environment, w, h);
     g_sensitivity_cache.environment_conf = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.environment_conf, w, h);
     g_sensitivity_cache.rr = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.rr, w, h);
@@ -280,59 +286,40 @@ static uint32_t pixel_sample_seed(int pixel_index, int sample_offset) {
 }
 
 static bool brdf_uses_random_sample(const Material& material) {
-    return !std::holds_alternative<Mirror>(material.brdf);
+    return !brdf_is_delta(material);
 }
 
 struct SensitivityState {
     float all = 0.0f;
-    float all_conf = 0.0f;
-    float pixel = 0.0f;
-    float pixel_conf = 0.0f;
-    float brdf = 0.0f;
-    float brdf_conf = 0.0f;
-    float lens = 0.0f;
-    float lens_conf = 0.0f;
-    float light = 0.0f;
-    float light_conf = 0.0f;
-    float environment = 0.0f;
-    float environment_conf = 0.0f;
-    float rr = 0.0f;
-    float rr_conf = 0.0f;
     float gradient = 0.0f;
+    std::array<float, 6> components{};
 
-    float relative_random(float value) const {
-        return rpf::relative_random_sensitivity(value, pixel);
-    }
-
-    float reliable_random(float value, float confidence) const {
-        return std::clamp(relative_random(value) * std::min(confidence, pixel_conf), 0.0f, 1.0f);
-    }
-
-    float reliable_sampling() const {
-        return std::clamp(all * all_conf, 0.0f, 1.0f);
+    float reliable() const {
+        return std::clamp(all, 0.0f, 1.0f);
     }
 
     float reliable_denoise() const {
-        return std::clamp(all * all_conf * (1.0f - gradient * (1.0f - all_conf)), 0.0f, 1.0f);
+        return std::clamp(all * (1.0f - gradient), 0.0f, 1.0f);
+    }
+
+    std::array<float, 6> components_denoise() const {
+        std::array<float, 6> reliable = components;
+        const float attenuation = 1.0f - gradient;
+        for (float& value : reliable) value = std::clamp(value * attenuation, 0.0f, 1.0f);
+        return reliable;
     }
 };
 
 static SensitivityState sample_sensitivity(const SensitivityImageCache& cache, int idx) {
     SensitivityState s;
     s.all = std::clamp(cache.all[idx], 0.0f, 1.0f);
-    s.all_conf = std::clamp(cache.all_conf[idx], 0.0f, 1.0f);
-    s.pixel = std::clamp(cache.pixel[idx], 0.0f, 1.0f);
-    s.pixel_conf = std::clamp(cache.pixel_conf[idx], 0.0f, 1.0f);
-    s.brdf = std::clamp(cache.brdf[idx], 0.0f, 1.0f);
-    s.brdf_conf = std::clamp(cache.brdf_conf[idx], 0.0f, 1.0f);
-    s.lens = std::clamp(cache.lens[idx], 0.0f, 1.0f);
-    s.lens_conf = std::clamp(cache.lens_conf[idx], 0.0f, 1.0f);
-    s.light = std::clamp(cache.light[idx], 0.0f, 1.0f);
-    s.light_conf = std::clamp(cache.light_conf[idx], 0.0f, 1.0f);
-    s.environment = std::clamp(cache.environment[idx], 0.0f, 1.0f);
-    s.environment_conf = std::clamp(cache.environment_conf[idx], 0.0f, 1.0f);
-    s.rr = std::clamp(cache.rr[idx], 0.0f, 1.0f);
-    s.rr_conf = std::clamp(cache.rr_conf[idx], 0.0f, 1.0f);
+    s.components = {
+        std::clamp(cache.brdf[idx], 0.0f, 1.0f),
+        std::clamp(cache.lens[idx], 0.0f, 1.0f),
+        std::clamp(cache.light_uv[idx], 0.0f, 1.0f),
+        std::clamp(cache.light_select[idx], 0.0f, 1.0f),
+        std::clamp(cache.environment[idx], 0.0f, 1.0f),
+        std::clamp(cache.rr[idx], 0.0f, 1.0f)};
     if (idx < static_cast<int>(cache.gradient.size())) {
         s.gradient = std::clamp(cache.gradient[idx], 0.0f, 1.0f);
     }
@@ -370,6 +357,12 @@ static void accumulate_rpf_sample_to_grid(rpf::Grid& grid, int x, int y, const r
             const float screen_v = std::clamp(
                 (float(y) + sample.pixel_u.y() - support_top) / float(grid.support_size), 0.0f, 1.0f);
             node.pixel.add(screen_u, screen_v, sample_lum_total, entry.w);
+            if (sample.brdf_valid) node.screen_brdf.add(screen_u, screen_v, sample_lum_total, entry.w);
+            if (sample.lens_valid) node.screen_lens.add(screen_u, screen_v, sample_lum_total, entry.w);
+            if (sample.light_valid) node.screen_light_uv.add(screen_u, screen_v, sample_lum_total, entry.w);
+            if (sample.light_select_valid) node.screen_light_select.add(screen_u, screen_v, sample_lum_total, entry.w);
+            if (sample.environment_valid) node.screen_environment.add(screen_u, screen_v, sample_lum_total, entry.w);
+            if (sample.rr_valid) node.screen_rr.add(screen_u, screen_v, sample_lum_total, entry.w);
         }
         if (sample.lens_valid) node.lens.add(sample.lens_u.x(), sample.lens_u.y(), sample_lum_total, entry.w);
         if (sample.brdf_valid) node.brdf.add(sample.brdf_u.x(), sample.brdf_u.y(), sample_lum_total, entry.w);
@@ -378,20 +371,6 @@ static void accumulate_rpf_sample_to_grid(rpf::Grid& grid, int x, int y, const r
             node.environment.add(sample.environment_u.x(), sample.environment_u.y(), sample_lum_total, entry.w);
         }
         if (sample.light_select_valid) node.light_select.add(sample.light_index, sample_lum_total, entry.w);
-        if (sample.light_uv_visibility_valid && sample.light_valid) {
-            const int light_x = std::clamp(static_cast<int>(sample.light_u.x() * 4.0f), 0, 3);
-            const int light_y = std::clamp(static_cast<int>(sample.light_u.y() * 4.0f), 0, 3);
-            node.light_uv_visibility.add(light_y * 4 + light_x, sample.light_uv_visible, entry.w);
-        }
-        if (sample.light_select_visibility_valid && sample.light_select_valid) {
-            node.light_select_visibility.add(sample.light_index, sample.light_select_visible, entry.w);
-        }
-        if (sample.environment_visibility_valid && sample.environment_valid) {
-            const int env_x = std::clamp(static_cast<int>(sample.environment_u.x() * 4.0f), 0, 3);
-            const int env_y = std::clamp(static_cast<int>(sample.environment_u.y() * 4.0f), 0, 3);
-            node.environment_visibility.add(
-                env_y * 4 + env_x, sample.environment_visible, entry.w);
-        }
         if (sample.rr_valid) node.rr.add(sample.rr_survived ? 1 : 0, sample_lum_total, entry.w);
     }
 }
@@ -417,19 +396,22 @@ Vec3f shade_mis(const HitInfo& hit, rpf::Sample* rpf_sample = nullptr) {
     const Vec3f& p = hit.position;
     const Vec3f& wo = hit.wo;
     const Vec3f& normal = hit.normal;
+    const bool delta_brdf = brdf_is_delta(material);
 
     Vec3f L_dir = Vec3f::Zero();
 
     const float light_select_u = Sampler::next1d();
     const auto [light_index, light_select_pdf] = scene.sample_light(light_select_u);
-    const bool captured_light_select = rpf_sample && rpf_sample->capture_light_select(
-        light_index, light_index >= 0 && light_index < rpf::LIGHT_CATEGORY_BINS);
+    if (rpf_sample) {
+        rpf_sample->capture_light_select(
+            light_index, light_index >= 0 && light_index < rpf::LIGHT_CATEGORY_BINS);
+    }
 
-    if (light_index >= 0) {
+    if (light_index >= 0 && (!delta_brdf || is_delta_light(scene.lights[light_index]))) {
         const Light& light = scene.lights[light_index];
         const bool is_delta = is_delta_light(light);
         Vec2f light_u = Sampler::next2d();
-        const bool captured_light_uv = rpf_sample && rpf_sample->capture_light_uv(light_u, !is_delta);
+        if (rpf_sample) rpf_sample->capture_light_uv(light_u, !is_delta);
 
         auto sample_light = [&](const auto& light_obj) {
             using T = std::decay_t<decltype(light_obj)>;
@@ -451,14 +433,15 @@ Vec3f shade_mis(const HitInfo& hit, rpf::Sample* rpf_sample = nullptr) {
 
                 Ray shadow_ray(offset_ray_origin(p, normal), light_sample.wi_world);
                 bool hit_shadow = any_hit_combined(shadow_ray, light_sample.light_dist, bvh, scene.triangles, scene.spheres);
-                if (captured_light_select) rpf_sample->capture_light_select_visibility(!hit_shadow);
-                if (captured_light_uv) rpf_sample->capture_light_uv_visibility(!hit_shadow);
 
                 if (!hit_shadow) {
                     Vec3f f = brdf_eval(material, wo, light_sample.wi_world, normal);
                     Vec3f emitted = eval_light(light, -light_sample.wi_world, light_sample.light_dist);
                     if (emitted.maxCoeff() > 0.0f) {
-                        Vec3f contribution = emitted.cwiseProduct(f) * std::max(0.0f, normal.dot(light_sample.wi_world)) / pdf_light;
+                        const float geometric_term = delta_brdf
+                            ? 1.0f
+                            : std::max(0.0f, normal.dot(light_sample.wi_world));
+                        Vec3f contribution = emitted.cwiseProduct(f) * geometric_term / pdf_light;
                         const Vec3f weighted_contribution = w_light * contribution;
                         L_dir += weighted_contribution;
                     }
@@ -468,16 +451,15 @@ Vec3f shade_mis(const HitInfo& hit, rpf::Sample* rpf_sample = nullptr) {
     }
 
     const Vec2f environment_u = Sampler::next2d();
-    if (scene.environment_color.maxCoeff() > 0.0f) {
+    if (scene.environment_color.maxCoeff() > 0.0f && !delta_brdf) {
         const Vec3f env_dir = Sampler::sample_sphere(environment_u);
-        const bool capture_environment = rpf_sample && rpf_sample->capture_environment(environment_u);
+        if (rpf_sample) rpf_sample->capture_environment(environment_u);
         constexpr float pdf_env = 1.0f / (4.0f * M_PI);
         const float brdf_pdf_env = brdf_pdf(material, wo, env_dir, normal);
         const float w_env = pdf_env / (pdf_env + brdf_pdf_env);
         const Ray env_ray(offset_ray_origin(p, normal), env_dir);
         const bool blocked = any_hit_combined(
             env_ray, std::numeric_limits<float>::infinity(), bvh, scene.triangles, scene.spheres);
-        if (capture_environment) rpf_sample->capture_environment_visibility(!blocked);
         if (!blocked) {
             const Vec3f f = brdf_eval(material, wo, env_dir, normal);
             const float cos_term = std::max(0.0f, normal.dot(env_dir));
@@ -515,35 +497,34 @@ Vec3f shade_mis(const HitInfo& hit, rpf::Sample* rpf_sample = nullptr) {
             const Light& emitter = scene.lights[emitter_idx];
 
             float w_brdf = 1.0f;
-            if (!is_delta_light(emitter)) {
+            if (!delta_brdf && !is_delta_light(emitter)) {
                 float pdf_light_brdf = scene.light_pdf(emitter_idx, scene.light_select_pdf(emitter_idx), p, ray_dir, t_min);
                 if (pdf_light_brdf > EPS_SMALL) {
                     w_brdf = pdf / (pdf + pdf_light_brdf);
                 }
             }
 
-            Vec3f f = brdf_eval(material, wo, ray_dir, normal);
-            L_dir += w_brdf * eval_light(emitter, -ray_dir, t_min).cwiseProduct(f) * (std::max(0.0f, normal.dot(ray_dir)) / pdf);
+            L_dir += w_brdf * eval_light(emitter, -ray_dir, t_min).cwiseProduct(
+                brdf_sample_weight(material, wo, ray_dir, normal, pdf));
         } else if (!is_ray_hit) {
             constexpr float pdf_env = 1.0f / (4.0f * M_PI);
-            float w_brdf = pdf / (pdf + pdf_env);
-            Vec3f f = brdf_eval(material, wo, ray_dir, normal);
-            L_dir += w_brdf * scene.environment_color.cwiseProduct(f) * (std::max(0.0f, normal.dot(ray_dir)) / pdf);
+            const float w_brdf = delta_brdf ? 1.0f : pdf / (pdf + pdf_env);
+            L_dir += w_brdf * scene.environment_color.cwiseProduct(
+                brdf_sample_weight(material, wo, ray_dir, normal, pdf));
         }
 
-        const float p_rr = 0.8f;
-        float ksi = Sampler::next1d();
-        if (rpf_sample) rpf_sample->capture_rr(ksi < p_rr);
-
-        if (ksi < p_rr) {
-            if (is_ray_hit && !hit_is_emitter) {
+        if (is_ray_hit && !hit_is_emitter) {
+            const float p_rr = 0.8f;
+            const float ksi = Sampler::next1d();
+            if (rpf_sample) rpf_sample->capture_rr(ksi < p_rr);
+            if (ksi < p_rr) {
                 const Vec3f next_hit_pos = brdf_ray.at(t_min);
                 Vec3f next_normal = (prim_type == PrimitiveType::Sphere) ? hit_normal : scene.triangles[idx].normal;
 
                 HitInfo next_hit{prim_type, idx, next_hit_pos, next_normal, -ray_dir};
 
-                Vec3f f = brdf_eval(material, wo, ray_dir, normal);
-                L_indir = shade_mis(next_hit, rpf_sample).cwiseProduct(f) * (std::max(0.0f, normal.dot(ray_dir)) / (pdf * p_rr));
+                L_indir = shade_mis(next_hit, rpf_sample).cwiseProduct(
+                    brdf_sample_weight(material, wo, ray_dir, normal, pdf)) / p_rr;
             }
         }
     }
@@ -666,6 +647,7 @@ void recompute_sensitivity(const RenderConfig& config);
 /// @param config Render configuration.
 /// @param camera Initialized camera.
 void render_image_statmc(const RenderConfig& config, const Camera& camera) {
+    const bool capture_rpd = config.rpf_shrinkage_scale > 0.0f;
     buffers.init(config.image_width, config.image_height);
     pixel_stats.assign(config.image_width * config.image_height, PixelStats{});
     rpf_grid.init(config.image_width, config.image_height, config.rpf_tile_size);
@@ -686,7 +668,7 @@ void render_image_statmc(const RenderConfig& config, const Camera& camera) {
         1;
 #endif
     // ponytail: full per-thread grids avoid locks; use row stripes if RSS dominates.
-    std::vector<rpf::Grid> local_rpf_grids(num_rpf_grids);
+    std::vector<rpf::Grid> local_rpf_grids(capture_rpd ? num_rpf_grids : 0);
     for (auto& grid : local_rpf_grids) {
         grid.init(config.image_width, config.image_height, config.rpf_tile_size);
         grid.reset();
@@ -695,8 +677,10 @@ void render_image_statmc(const RenderConfig& config, const Camera& camera) {
 #ifdef _OPENMP
 #pragma omp parallel
     {
-        rpf::Grid& local_rpf_grid = local_rpf_grids[omp_get_thread_num()];
+        const int rpf_grid_index = omp_get_thread_num();
 #pragma omp for schedule(dynamic, 1)
+#else
+    const int rpf_grid_index = 0;
 #endif
     for (int y = 0; y < config.image_height; ++y) {
         for (int x = 0; x < config.image_width; ++x) {
@@ -713,23 +697,20 @@ void render_image_statmc(const RenderConfig& config, const Camera& camera) {
                     ? Sampler::sample_disk(lens_u)
                     : Vec2f::Zero();
                 rpf::Sample rpf_sample{};
-                rpf_sample.capture_pixel(pixel_u);
-                if (camera.lens_radius > 0.0f) rpf_sample.capture_lens(lens_u);
+                if (capture_rpd) {
+                    rpf_sample.capture_pixel(pixel_u);
+                    if (camera.lens_radius > 0.0f) rpf_sample.capture_lens(lens_u);
+                }
 
                 Ray ray = camera.generate_ray(u, (1.0f - v), lens_sample);
-                Vec3f path_trace = mis_path_trace(ray, idx, &rpf_sample);
+                Vec3f path_trace = mis_path_trace(ray, idx, capture_rpd ? &rpf_sample : nullptr);
                 if (!path_trace.allFinite()) continue;
                 
-                const float sample_lum = calc_luminance(path_trace);
-#ifdef _OPENMP
-                accumulate_rpf_sample_to_grid(local_rpf_grid, x, y, rpf_sample, sample_lum);
-#else
-                accumulate_rpf_sample_to_grid(local_rpf_grids[0], x, y, rpf_sample, sample_lum);
-#endif
-
-                if (rpf_sample.light_select_visibility_valid) {
-                    pixel_stats[idx].accumulate_light_visibility(rpf_sample.light_select_visible);
+                if (capture_rpd) {
+                    accumulate_rpf_sample_to_grid(
+                        local_rpf_grids[rpf_grid_index], x, y, rpf_sample, calc_luminance(path_trace));
                 }
+
                 accumulate_sample(pixel_stats[idx], path_trace);
 
                 buffers.radiance(x,y) += path_trace;
@@ -746,7 +727,7 @@ void render_image_statmc(const RenderConfig& config, const Camera& camera) {
     }
 #endif
 
-    merge_rpf_grids_into(rpf_grid, local_rpf_grids);
+    if (capture_rpd) merge_rpf_grids_into(rpf_grid, local_rpf_grids);
 
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
@@ -767,14 +748,24 @@ void recompute_sensitivity(const RenderConfig& config) {
     const int node_count = nodes_x * nodes_y;
     invalidate_sensitivity_cache();
     buffers.init_sensitivity(rpf_grid.support_size);
+    if (config.rpf_shrinkage_scale <= 0.0f) {
+        buffers.sensitivity_confidence.assign(w * h, 0.0f);
+        buffers.sensitivity_gradient.assign(w * h, 0.0f);
+        ensure_sensitivity_cache(w, h);
+        return;
+    }
 
     const auto& features = ensure_feature_cache(w, h);
     const auto& normals_unit = features.normals_unit;
     const auto& depth_avg = features.depth_avg;
     const auto& albedo_avg = features.albedo_avg;
 
-    std::vector<float> raw_pixel(node_count, 0.0f), raw_brdf(node_count, 0.0f), raw_lens(node_count, 0.0f), raw_light(node_count, 0.0f), raw_environment(node_count, 0.0f), raw_rr(node_count, 0.0f);
-    std::vector<float> conf_pixel(node_count, 0.0f), conf_brdf(node_count, 0.0f), conf_lens(node_count, 0.0f), conf_light(node_count, 0.0f), conf_environment(node_count, 0.0f), conf_rr(node_count, 0.0f);
+    std::vector<float> raw_pixel(node_count, 0.0f), raw_brdf(node_count, 0.0f), raw_lens(node_count, 0.0f), raw_light_uv(node_count, 0.0f), raw_light_select(node_count, 0.0f), raw_environment(node_count, 0.0f), raw_rr(node_count, 0.0f);
+    std::vector<float> conf_pixel(node_count, 0.0f), conf_brdf(node_count, 0.0f), conf_lens(node_count, 0.0f), conf_light_uv(node_count, 0.0f), conf_light_select(node_count, 0.0f), conf_environment(node_count, 0.0f), conf_rr(node_count, 0.0f);
+    std::array<std::vector<float>, 6> raw_screen;
+    std::array<std::vector<float>, 6> conf_screen;
+    for (auto& values : raw_screen) values.assign(node_count, 0.0f);
+    for (auto& values : conf_screen) values.assign(node_count, 0.0f);
     std::vector<Vec3f> node_normals(node_count, Vec3f::Zero());
     std::vector<float> node_depth(node_count, 0.0f);
     std::vector<Vec3f> node_albedo(node_count, Vec3f::Zero());
@@ -790,15 +781,29 @@ void recompute_sensitivity(const RenderConfig& config) {
             raw_pixel[idx] = sens.pixel;
             raw_brdf[idx] = sens.brdf;
             raw_lens[idx] = sens.lens;
-            raw_light[idx] = sens.light;
+            raw_light_uv[idx] = sens.light_uv;
+            raw_light_select[idx] = sens.light_select;
             raw_environment[idx] = sens.environment;
             raw_rr[idx] = sens.rr;
+            raw_screen[0][idx] = sens.screen_brdf;
+            raw_screen[1][idx] = sens.screen_lens;
+            raw_screen[2][idx] = sens.screen_light_uv;
+            raw_screen[3][idx] = sens.screen_light_select;
+            raw_screen[4][idx] = sens.screen_environment;
+            raw_screen[5][idx] = sens.screen_rr;
             conf_pixel[idx] = conf.pixel;
             conf_brdf[idx] = conf.brdf;
             conf_lens[idx] = conf.lens;
-            conf_light[idx] = conf.light;
+            conf_light_uv[idx] = conf.light_uv;
+            conf_light_select[idx] = conf.light_select;
             conf_environment[idx] = conf.environment;
             conf_rr[idx] = conf.rr;
+            conf_screen[0][idx] = conf.screen_brdf;
+            conf_screen[1][idx] = conf.screen_lens;
+            conf_screen[2][idx] = conf.screen_light_uv;
+            conf_screen[3][idx] = conf.screen_light_select;
+            conf_screen[4][idx] = conf.screen_environment;
+            conf_screen[5][idx] = conf.screen_rr;
 
             const int px = std::clamp(nx * step, 0, w - 1);
             const int py = std::clamp(ny * step, 0, h - 1);
@@ -848,9 +853,14 @@ void recompute_sensitivity(const RenderConfig& config) {
     const std::vector<float> prior_pixel = prior_smooth(raw_pixel, conf_pixel);
     const std::vector<float> prior_brdf = prior_smooth(raw_brdf, conf_brdf);
     const std::vector<float> prior_lens = prior_smooth(raw_lens, conf_lens);
-    const std::vector<float> prior_light = prior_smooth(raw_light, conf_light);
+    const std::vector<float> prior_light_uv = prior_smooth(raw_light_uv, conf_light_uv);
+    const std::vector<float> prior_light_select = prior_smooth(raw_light_select, conf_light_select);
     const std::vector<float> prior_environment = prior_smooth(raw_environment, conf_environment);
     const std::vector<float> prior_rr = prior_smooth(raw_rr, conf_rr);
+    std::array<std::vector<float>, 6> prior_screen;
+    for (int component = 0; component < 6; ++component) {
+        prior_screen[component] = prior_smooth(raw_screen[component], conf_screen[component]);
+    }
 
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)
@@ -859,42 +869,62 @@ void recompute_sensitivity(const RenderConfig& config) {
         const float final_pixel = lerp(prior_pixel[idx], raw_pixel[idx], conf_pixel[idx]);
         const float final_brdf = lerp(prior_brdf[idx], raw_brdf[idx], conf_brdf[idx]);
         const float final_lens = lerp(prior_lens[idx], raw_lens[idx], conf_lens[idx]);
-        const float final_light = lerp(prior_light[idx], raw_light[idx], conf_light[idx]);
+        const float final_light_uv = lerp(prior_light_uv[idx], raw_light_uv[idx], conf_light_uv[idx]);
+        const float final_light_select = lerp(prior_light_select[idx], raw_light_select[idx], conf_light_select[idx]);
         const float final_environment = lerp(prior_environment[idx], raw_environment[idx], conf_environment[idx]);
         const float final_rr = lerp(prior_rr[idx], raw_rr[idx], conf_rr[idx]);
+        float screen_components[6];
+        for (int component = 0; component < 6; ++component) {
+            screen_components[component] = lerp(
+                prior_screen[component][idx], raw_screen[component][idx], conf_screen[component][idx]);
+        }
         buffers.sensitivity_tiles.pixel[idx] = std::clamp(final_pixel, 0.0f, 1.0f);
         buffers.sensitivity_tiles.brdf[idx] = std::clamp(final_brdf, 0.0f, 1.0f);
         buffers.sensitivity_tiles.lens[idx] = std::clamp(final_lens, 0.0f, 1.0f);
-        buffers.sensitivity_tiles.light[idx] = std::clamp(final_light, 0.0f, 1.0f);
+        buffers.sensitivity_tiles.light_uv[idx] = std::clamp(final_light_uv, 0.0f, 1.0f);
+        buffers.sensitivity_tiles.light_select[idx] = std::clamp(final_light_select, 0.0f, 1.0f);
         buffers.sensitivity_tiles.environment[idx] = std::clamp(final_environment, 0.0f, 1.0f);
         buffers.sensitivity_tiles.rr[idx] = std::clamp(final_rr, 0.0f, 1.0f);
         buffers.sensitivity_tiles.pixel_conf[idx] = std::clamp(conf_pixel[idx], 0.0f, 1.0f);
         buffers.sensitivity_tiles.brdf_conf[idx] = std::clamp(conf_brdf[idx], 0.0f, 1.0f);
         buffers.sensitivity_tiles.lens_conf[idx] = std::clamp(conf_lens[idx], 0.0f, 1.0f);
-        buffers.sensitivity_tiles.light_conf[idx] = std::clamp(conf_light[idx], 0.0f, 1.0f);
+        buffers.sensitivity_tiles.light_uv_conf[idx] = std::clamp(conf_light_uv[idx], 0.0f, 1.0f);
+        buffers.sensitivity_tiles.light_select_conf[idx] = std::clamp(conf_light_select[idx], 0.0f, 1.0f);
         buffers.sensitivity_tiles.environment_conf[idx] = std::clamp(conf_environment[idx], 0.0f, 1.0f);
         buffers.sensitivity_tiles.rr_conf[idx] = std::clamp(conf_rr[idx], 0.0f, 1.0f);
-        const float random_components[5] = {
+        const float random_components[6] = {
             buffers.sensitivity_tiles.brdf[idx], buffers.sensitivity_tiles.lens[idx],
-            buffers.sensitivity_tiles.light[idx], buffers.sensitivity_tiles.environment[idx],
+            buffers.sensitivity_tiles.light_uv[idx], buffers.sensitivity_tiles.light_select[idx],
+            buffers.sensitivity_tiles.environment[idx],
             buffers.sensitivity_tiles.rr[idx]};
-        const float random_confidences[5] = {
+        const float random_confidences[6] = {
             buffers.sensitivity_tiles.brdf_conf[idx], buffers.sensitivity_tiles.lens_conf[idx],
-            buffers.sensitivity_tiles.light_conf[idx], buffers.sensitivity_tiles.environment_conf[idx],
+            buffers.sensitivity_tiles.light_uv_conf[idx], buffers.sensitivity_tiles.light_select_conf[idx],
+            buffers.sensitivity_tiles.environment_conf[idx],
             buffers.sensitivity_tiles.rr_conf[idx]};
-        float relative_components[5];
-        float reliable_components[5];
-        for (int component = 0; component < 5; ++component) {
+        float relative_components[6];
+        float reliable_components[6];
+        for (int component = 0; component < 6; ++component) {
             relative_components[component] = rpf::relative_random_sensitivity(
-                random_components[component], buffers.sensitivity_tiles.pixel[idx]);
+                random_components[component], screen_components[component]);
             reliable_components[component] = relative_components[component] * std::min(
-                random_confidences[component], buffers.sensitivity_tiles.pixel_conf[idx]);
+                random_confidences[component], conf_screen[component][idx]);
         }
         const int dominant = static_cast<int>(
-            std::max_element(reliable_components, reliable_components + 5) - reliable_components);
-        buffers.sensitivity_tiles.all[idx] = relative_components[dominant];
+            std::max_element(reliable_components, reliable_components + 6) - reliable_components);
+        buffers.sensitivity_tiles.brdf[idx] = reliable_components[0];
+        buffers.sensitivity_tiles.lens[idx] = reliable_components[1];
+        buffers.sensitivity_tiles.light_uv[idx] = reliable_components[2];
+        buffers.sensitivity_tiles.light_select[idx] = reliable_components[3];
+        buffers.sensitivity_tiles.light[idx] = std::max(reliable_components[2], reliable_components[3]);
+        buffers.sensitivity_tiles.environment[idx] = reliable_components[4];
+        buffers.sensitivity_tiles.rr[idx] = reliable_components[5];
+        buffers.sensitivity_tiles.light_conf[idx] = reliable_components[2] >= reliable_components[3]
+            ? random_confidences[2]
+            : random_confidences[3];
+        buffers.sensitivity_tiles.all[idx] = reliable_components[dominant];
         buffers.sensitivity_tiles.all_conf[idx] = std::min(
-            random_confidences[dominant], buffers.sensitivity_tiles.pixel_conf[idx]);
+            random_confidences[dominant], conf_screen[dominant][idx]);
     }
 
     const std::vector<float> expanded_sensitivity = buffers.sensitivity_tiles.expand_values(buffers.sensitivity_tiles.all, w, h);
@@ -933,9 +963,6 @@ void statmc_denoise(const RenderConfig& config) {
     const float depth_threshold = config.color_depth_threshold;
     const float rpd_scale = config.rpf_shrinkage_scale;
 
-    const float normal_floor = 0.25f;
-    const float depth_max_limit = 0.6f;
-
     const auto& features = ensure_feature_cache(w, h);
     const auto& normals_unit = features.normals_unit;
     const auto& depth_avg = features.depth_avg;
@@ -971,9 +998,6 @@ void statmc_denoise(const RenderConfig& config) {
     for (int y = 0; y < h; ++y) {
         for (int x = 0; x < w; ++x) {
             int idx = y * w + x;
-            buffers.light_visibility[idx] = (pixel_stats[idx].light_visibility_n > 0)
-                ? pixel_stats[idx].light_visibility_mean()
-                : 0.0f;
             if (buffers.hit_count[idx] == 0) {
                 buffers.denoised(x, y) = pixel_stats[idx].color_mean;
                 buffers.uncertainty[idx] = pixel_stats[idx].variance() / float(std::max(1, pixel_stats[idx].n));
@@ -990,6 +1014,7 @@ void statmc_denoise(const RenderConfig& config) {
             var_i = std::clamp(var_i, EPS_SMALL, var2_max);
             const int n_i = std::max(1, pixel_stats[idx].n);
             const SensitivityState sens_i = sample_sensitivity(sensitivity, idx);
+            const auto rpd_components_i = sens_i.components_denoise();
             const float var_mean_i = std::max(EPS_SMALL, var_i / float(n_i));
             const Vec3f sqrt_mean_i = pixel_stats[idx].sqrt_color_mean;
             const Vec3f sqrt_var_mean_i = sqrt_variance_stable[idx];
@@ -1015,40 +1040,17 @@ void statmc_denoise(const RenderConfig& config) {
                     if (buffers.hit_count[neighbor_idx] == 0) continue;
 
                     const SensitivityState sens_j = sample_sensitivity(sensitivity, neighbor_idx);
-                    const float lens_reliability = std::clamp(rpd_scale * std::max(
-                        sens_i.reliable_random(sens_i.lens, sens_i.lens_conf),
-                        sens_j.reliable_random(sens_j.lens, sens_j.lens_conf)), 0.0f, 1.0f);
-                    const float normal_gate = lerp(normal_threshold, normal_floor, 0.5f * lens_reliability);
-                    const float depth_gate_limit = lerp(depth_threshold, depth_max_limit, 0.5f * lens_reliability);
 
                     const Vec3f normal_j = normals_unit[neighbor_idx];
-                    if (normal_i.dot(normal_j) < normal_gate) continue;
+                    if (normal_i.dot(normal_j) < normal_threshold) continue;
 
                     const float depth_delta = relative_depth_delta(depth_i, depth_avg[neighbor_idx]);
-                    if (depth_delta > depth_gate_limit) continue;
+                    if (depth_delta > depth_threshold) continue;
 
                     const Vec3f albedo_i = albedo_avg[idx];
                     const Vec3f albedo_j = albedo_avg[neighbor_idx];
                     const float albedo_diff = (albedo_i - albedo_j).norm();
                     if (albedo_diff > rpf::BASE_ALBEDO_THRESH) continue;
-
-                    double visibility_q = 0.0;
-                    if (pixel_stats[idx].light_visibility_n > 0 &&
-                        pixel_stats[neighbor_idx].light_visibility_n > 0) {
-                        const float light_reliability = std::clamp(rpd_scale * std::max(
-                            sens_i.reliable_random(sens_i.light, sens_i.light_conf),
-                            sens_j.reliable_random(sens_j.light, sens_j.light_conf)), 0.0f, 1.0f);
-                        const double visibility_delta = static_cast<double>(
-                            pixel_stats[idx].light_visibility_mean() -
-                            pixel_stats[neighbor_idx].light_visibility_mean());
-                        const double visibility_variance = static_cast<double>(
-                            pixel_stats[idx].light_visibility_variance() +
-                            pixel_stats[neighbor_idx].light_visibility_variance());
-                        constexpr double visibility_chi_square_95 = 3.841458820694124;
-                        visibility_q = static_cast<double>(light_reliability) *
-                            visibility_delta * visibility_delta /
-                            std::max(static_cast<double>(EPS_SMALL), visibility_chi_square_95 * visibility_variance);
-                    }
 
                     float var_j = pixel_stats[neighbor_idx].variance();
                     if (!std::isfinite(var_j)) var_j = EPS_SMALL;
@@ -1074,11 +1076,15 @@ void statmc_denoise(const RenderConfig& config) {
                         const double t_crit = static_cast<double>(lookup_t_critical(static_cast<float>(df), config.color_compat_alpha));
                         max_normalized_t2 = std::max(max_normalized_t2, t2 / (t_crit * t_crit));
                     }
-                    if (max_normalized_t2 > 25.0) continue;
+                    const double compatibility_q = rpf::relax_compatibility(
+                        max_normalized_t2,
+                        rpf::shared_reliability(rpd_components_i, sens_j.components_denoise()),
+                        rpd_scale);
+                    if (compatibility_q > 25.0) continue;
 
                     const double dist2 = double(dx * dx + dy * dy);
                     const double spatial_w = 1.0 / (1.0 + dist2);
-                    const double weight_j = spatial_w * std::exp(-0.5 * (max_normalized_t2 + visibility_q));
+                    const double weight_j = spatial_w * std::exp(-0.5 * compatibility_q);
                     color_sum += pixel_stats[neighbor_idx].color_mean.cast<double>() * weight_j;
                     weight_sum += weight_j;
                     weight_square_sum += weight_j * weight_j;
@@ -1109,7 +1115,10 @@ void statmc_denoise(const RenderConfig& config) {
             Vec3f denoised = lerp(mean_color_i, mean_color_neighbors, static_cast<float>(blend));
             const float uncertainty = static_cast<float>(
                 static_cast<double>(alpha) * static_cast<double>(alpha) * static_cast<double>(var_mean_i) +
-                blend * blend * var_neighbors);
+                blend * blend * var_neighbors +
+                2.0 * static_cast<double>(alpha) * blend *
+                    (center_weight / std::max(weight_sum, static_cast<double>(EPS_SMALL))) *
+                    static_cast<double>(var_mean_i));
 
             buffers.alpha[idx] = alpha;
 
@@ -1118,11 +1127,11 @@ void statmc_denoise(const RenderConfig& config) {
         }
     }
     if (config.debug_statmc_outputs) {
-        std::vector<float> reliability_sampling(w * h, 0.0f);
+        std::vector<float> reliability_base(w * h, 0.0f);
         std::vector<float> reliability_denoise(w * h, 0.0f);
         for (int i = 0; i < w * h; ++i) {
             const SensitivityState sens = sample_sensitivity(sensitivity, i);
-            reliability_sampling[i] = sens.reliable_sampling();
+            reliability_base[i] = sens.reliable();
             reliability_denoise[i] = sens.reliable_denoise();
         }
         scalar_to_image(neighbor_count_debug, w, h).save("debug_neighbors.hdr");
@@ -1137,11 +1146,13 @@ void statmc_denoise(const RenderConfig& config) {
         scalar_to_image(sensitivity.brdf, w, h).save("debug_sensitivity_brdf.hdr");
         scalar_to_image(sensitivity.lens, w, h).save("debug_sensitivity_lens.hdr");
         scalar_to_image(sensitivity.light, w, h).save("debug_sensitivity_light.hdr");
+        scalar_to_image(sensitivity.light_uv, w, h).save("debug_sensitivity_light_uv.hdr");
+        scalar_to_image(sensitivity.light_select, w, h).save("debug_sensitivity_light_select.hdr");
         scalar_to_image(sensitivity.environment, w, h).save("debug_sensitivity_environment.hdr");
         scalar_to_image(sensitivity.rr, w, h).save("debug_sensitivity_rr.hdr");
         scalar_to_image(buffers.sensitivity_confidence, w, h).save("debug_sensitivity_confidence.hdr");
         scalar_to_image(buffers.sensitivity_gradient, w, h).save("debug_sensitivity_gradient.hdr");
-        scalar_to_image(reliability_sampling, w, h).save("debug_reliability_sampling.hdr");
+        scalar_to_image(reliability_base, w, h).save("debug_reliability_base.hdr");
         scalar_to_image(reliability_denoise, w, h).save("debug_reliability_denoise.hdr");
     }
 
@@ -1150,9 +1161,9 @@ void statmc_denoise(const RenderConfig& config) {
     spdlog::info("StatMC denoise completed in {} ms", duration.count());
 }
 
-/// @brief Stabilizes the variance-of-mean field used by adaptive sampling.
+/// @brief Stabilizes the per-sample variance field used by adaptive sampling.
 /// @param config Render configuration controlling variance smoothing.
-void var_mean_denoise(const RenderConfig& config) {
+void variance_denoise(const RenderConfig& config) {
     const auto start = std::chrono::high_resolution_clock::now();
     const int w = config.image_width;
     const int h = config.image_height;
@@ -1162,6 +1173,7 @@ void var_mean_denoise(const RenderConfig& config) {
     const float compat_sigma = config.var_compat_sigma;
     const float shrinkage_k = config.var_shrinkage_k;
     const int iterations = config.var_iterations;
+    const float max_variance = config.adaptive_sigma_max * config.adaptive_sigma_max;
 
     std::vector<float> curr(w * h, 0.0f);
     std::vector<float> next(w * h, 0.0f);
@@ -1171,9 +1183,7 @@ void var_mean_denoise(const RenderConfig& config) {
     for (int i = 0; i < w * h; ++i) {
         float v = pixel_stats[i].variance();
         if (!std::isfinite(v)) v = EPS_SMALL;
-        v = std::max(EPS_SMALL, v);
-        const int n = std::max(1, pixel_stats[i].n);
-        curr[i] = std::max(EPS_SMALL, v / float(n));
+        curr[i] = std::clamp(v, EPS_SMALL, max_variance);
     }
 
     const auto& features = ensure_feature_cache(w, h);
@@ -1217,11 +1227,12 @@ void var_mean_denoise(const RenderConfig& config) {
                         if (depth_gate > depth_threshold) continue;
 
                         const float var_j = std::max(EPS_SMALL, src[neighbor_idx]);
-                        if (std::abs(var_i - var_j) > compat_sigma * std::sqrt(var_i + var_j)) continue;
+                        const float relative_difference = std::abs(var_i - var_j) /
+                            std::max(EPS_SMALL, std::sqrt(var_i * var_j));
+                        if (relative_difference > compat_sigma) continue;
 
                         const float dist2 = float(dx * dx + dy * dy);
-                        const float spatial_w = 1.0f / (1.0f + dist2);
-                        const float w_j = spatial_w / std::max(EPS_SMALL, std::sqrt(var_i + var_j));
+                        const float w_j = 1.0f / (1.0f + dist2);
                         weighted_sum += w_j * var_j;
                         weight_sum += w_j;
                     }
@@ -1230,10 +1241,7 @@ void var_mean_denoise(const RenderConfig& config) {
                 float neighbor_mean = var_i;
                 if (weight_sum > EPS_SMALL) neighbor_mean = weighted_sum / weight_sum;
 
-                const float k_eff = shrinkage_k;
-                float blend = std::max(0.0f, var_i - neighbor_mean) / std::max(EPS_SMALL, var_i + neighbor_mean + k_eff);
-                blend = std::clamp(blend, 0.0f, 1.0f);
-                dst[idx] = lerp(var_i, neighbor_mean, blend);
+                dst[idx] = rpf::conservative_variance_update(var_i, neighbor_mean, shrinkage_k);
             }
         }
     };
@@ -1249,16 +1257,14 @@ void var_mean_denoise(const RenderConfig& config) {
     for (int i = 0; i < w * h; ++i) {
         float raw = pixel_stats[i].variance();
         if (!std::isfinite(raw)) raw = EPS_SMALL;
-        raw = std::max(EPS_SMALL, raw);
-        const int n = std::max(1, pixel_stats[i].n);
-        const float raw_var_mean = raw / float(n);
-        curr[i] = std::max(curr[i], raw_var_mean);
+        raw = std::clamp(raw, EPS_SMALL, max_variance);
+        curr[i] = std::max(curr[i], raw);
     }
 
-    buffers.var_mean_denoised = std::move(curr);
+    buffers.variance_denoised = std::move(curr);
     const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::high_resolution_clock::now() - start);
-    spdlog::info("Variance-of-mean denoise completed in {} ms", duration.count());
+    spdlog::info("Sample-variance denoise completed in {} ms", duration.count());
 }
 
 /// @brief Allocates one adaptive pass without exceeding its sample budget.
@@ -1294,7 +1300,7 @@ std::vector<int> compute_adaptive_sample_counts(const RenderConfig& config) {
     std::vector<float> importance(w * h, 0.0f);
     double sum_importance = 0.0;
 
-    std::vector<float> variance_source = buffers.var_mean_denoised;
+    std::vector<float> variance_source = buffers.variance_denoised;
     if (variance_source.size() != static_cast<size_t>(w * h)) variance_source.assign(w * h, 0.0f);
 #ifdef _OPENMP
 #pragma omp parallel for schedule(static)
@@ -1303,8 +1309,7 @@ std::vector<int> compute_adaptive_sample_counts(const RenderConfig& config) {
         float raw = pixel_stats[i].variance();
         if (!std::isfinite(raw)) raw = EPS_SMALL;
         raw = std::max(EPS_SMALL, raw);
-        const int n = std::max(1, pixel_stats[i].n);
-        float denoised_sample_variance = variance_source[i] * float(n);
+        float denoised_sample_variance = variance_source[i];
         if (!std::isfinite(denoised_sample_variance) || denoised_sample_variance <= 0.0f) {
             denoised_sample_variance = raw;
         }
@@ -1446,6 +1451,7 @@ std::vector<int> compute_adaptive_sample_counts(const RenderConfig& config) {
 void render_image_adaptive(const RenderConfig& config, const Camera& camera) {
     if (config.adaptive_spp <= 0)  return;
 
+    const bool capture_rpd = config.rpf_shrinkage_scale > 0.0f;
     const int floor_per_pixel = std::clamp(config.adaptive_base_samples, 0, config.adaptive_spp);
     spdlog::info("Adaptive render: extra spp = {}, minimum per-pixel = {} (budget-preserving), passes = {}",
                  config.adaptive_spp, floor_per_pixel, config.adaptive_passes);
@@ -1465,7 +1471,7 @@ void render_image_adaptive(const RenderConfig& config, const Camera& camera) {
 #else
         1;
 #endif
-    std::vector<rpf::Grid> local_rpf_grids(num_rpf_grids);
+    std::vector<rpf::Grid> local_rpf_grids(capture_rpd ? num_rpf_grids : 0);
     for (auto& grid : local_rpf_grids) {
         grid.init(w, h, config.rpf_tile_size);
         grid.reset();
@@ -1474,8 +1480,10 @@ void render_image_adaptive(const RenderConfig& config, const Camera& camera) {
 #ifdef _OPENMP
 #pragma omp parallel
     {
-        rpf::Grid& local_rpf_grid = local_rpf_grids[omp_get_thread_num()];
+        const int rpf_grid_index = omp_get_thread_num();
 #pragma omp for schedule(dynamic, 1)
+#else
+    const int rpf_grid_index = 0;
 #endif
     for (int y = 0; y < h; ++y) {
         for (int x = 0; x < w; ++x) {
@@ -1492,21 +1500,18 @@ void render_image_adaptive(const RenderConfig& config, const Camera& camera) {
                     ? Sampler::sample_disk(lens_u)
                     : Vec2f::Zero();
                 rpf::Sample rpf_sample{};
-                rpf_sample.capture_pixel(pixel_u);
-                if (camera.lens_radius > 0.0f) rpf_sample.capture_lens(lens_u);
+                if (capture_rpd) {
+                    rpf_sample.capture_pixel(pixel_u);
+                    if (camera.lens_radius > 0.0f) rpf_sample.capture_lens(lens_u);
+                }
 
                 Ray ray = camera.generate_ray(u, (1.0f - v), lens_sample);
-                Vec3f path_trace = mis_path_trace(ray, idx, &rpf_sample);
+                Vec3f path_trace = mis_path_trace(ray, idx, capture_rpd ? &rpf_sample : nullptr);
                 if (!path_trace.allFinite()) continue;
 
-                const float sample_lum = calc_luminance(path_trace);
-#ifdef _OPENMP
-                accumulate_rpf_sample_to_grid(local_rpf_grid, x, y, rpf_sample, sample_lum);
-#else
-                accumulate_rpf_sample_to_grid(local_rpf_grids[0], x, y, rpf_sample, sample_lum);
-#endif
-                if (rpf_sample.light_select_visibility_valid) {
-                    pixel_stats[idx].accumulate_light_visibility(rpf_sample.light_select_visible);
+                if (capture_rpd) {
+                    accumulate_rpf_sample_to_grid(
+                        local_rpf_grids[rpf_grid_index], x, y, rpf_sample, calc_luminance(path_trace));
                 }
                 accumulate_sample(pixel_stats[idx], path_trace);
                 buffers.radiance(x, y) += path_trace;
@@ -1523,7 +1528,7 @@ void render_image_adaptive(const RenderConfig& config, const Camera& camera) {
     }
 #endif
 
-    merge_rpf_grids_into(rpf_grid, local_rpf_grids);
+    if (capture_rpd) merge_rpf_grids_into(rpf_grid, local_rpf_grids);
 
     invalidate_postprocess_caches();
 
@@ -1541,15 +1546,16 @@ void render(const RenderConfig& config, const Camera& camera) {
 
         for (int i = 0; i < config.adaptive_passes && config.adaptive_spp > 0; ++i) {
             statmc_denoise(config);
-            var_mean_denoise(config);
+            variance_denoise(config);
             render_image_adaptive(config, camera);
             recompute_sensitivity(config);
         }
         
         recompute_sensitivity(config);
         statmc_denoise(config);
-        var_mean_denoise(config);
+        variance_denoise(config);
         buffers.finalize();
+        buffers.raw_radiance = buffers.radiance;
         buffers.radiance = buffers.denoised;
     } else {
         render_image(config, camera);
@@ -1600,18 +1606,18 @@ int main(int argc, char** argv) {
     app.add_option("--color-depth-thresh", color_depth_thresh_cli, "Color relative depth threshold (>=0)");
     app.add_option("--color-compat-alpha", color_compat_alpha_cli, "Color compatibility significance alpha (0,1)");
     app.add_option("--color-sigma-max", color_sigma_max_cli, "Max stddev clamp for color variance (>0)");
-    app.add_option("--var-window-radius", var_window_radius_cli, "Variance-of-mean window radius (pixels)")->check(CLI::PositiveNumber);
-    app.add_option("--var-normal-thresh", var_normal_thresh_cli, "Variance-of-mean normal dot threshold (0,1]");
-    app.add_option("--var-depth-thresh", var_depth_thresh_cli, "Variance-of-mean relative depth threshold (>=0)");
-    app.add_option("--var-compat-sigma", var_compat_sigma_cli, "Variance-of-mean compatibility sigma (>0)");
-    app.add_option("--var-shrinkage-k", var_shrinkage_k_cli, "Variance-of-mean shrinkage stabilizer (>0)");
-    app.add_option("--var-iterations", var_iterations_cli, "Variance-of-mean smoothing iterations")->check(CLI::PositiveNumber);
+    app.add_option("--var-window-radius", var_window_radius_cli, "Sample-variance window radius (pixels)")->check(CLI::PositiveNumber);
+    app.add_option("--var-normal-thresh", var_normal_thresh_cli, "Sample-variance normal dot threshold (0,1]");
+    app.add_option("--var-depth-thresh", var_depth_thresh_cli, "Sample-variance relative depth threshold (>=0)");
+    app.add_option("--var-compat-sigma", var_compat_sigma_cli, "Sample-variance relative compatibility threshold (>0)");
+    app.add_option("--var-shrinkage-k", var_shrinkage_k_cli, "Sample-variance shrinkage stabilizer (>0)");
+    app.add_option("--var-iterations", var_iterations_cli, "Sample-variance smoothing iterations")->check(CLI::PositiveNumber);
     app.add_option("--adaptive-base-samples", adaptive_base_samples_cli, "Minimum extra samples per pixel per adaptive pass, taken from the adaptive_spp budget");
     app.add_option("--adaptive-spp", adaptive_spp_cli, "Extra samples per adaptive pass (spp)");
     app.add_option("--adaptive-sigma-max", adaptive_sigma_max_cli, "Max sigma clamp for adaptive importance (>0)");
     app.add_option("--adaptive-passes", adaptive_passes_cli, "Number of adaptive refinement passes (>=0)");
     app.add_option("--adaptive-importance-radius", adaptive_importance_smoothing_radius_cli, "Edge-aware smoothing radius for adaptive importance (>=0)");
-    app.add_option("--rpf-shrinkage-scale", rpf_shrinkage_scale_cli, "Scale RP-based feature gating; zero disables all RPD influence on reconstruction");
+    app.add_option("--rpf-shrinkage-scale", rpf_shrinkage_scale_cli, "Scale RPD-guided StatMC compatibility relaxation; zero disables all RPD influence on reconstruction");
     app.add_option("--rpf-confidence-samples", rpf_confidence_samples_cli, "Confidence sample mass for RP sensitivity shrinkage (>0)");
     app.add_option("--tonemap", tonemap_cli, "Tonemapping preset: aces | agx | agx-golden | agx-punchy");
     app.add_option("--seed", sampler_seed, "Optional RNG seed for the sampler");
@@ -1783,13 +1789,13 @@ int main(int argc, char** argv) {
         return 1;
     }
     float rpf_shrinkage_scale = std::isnan(rpf_shrinkage_scale_cli) ? render_config.rpf_shrinkage_scale : rpf_shrinkage_scale_cli;
-    if (rpf_shrinkage_scale < 0.0f) {
-        spdlog::error("rpf_shrinkage_scale must be non-negative");
+    if (!std::isfinite(rpf_shrinkage_scale) || rpf_shrinkage_scale < 0.0f) {
+        spdlog::error("rpf_shrinkage_scale must be finite and non-negative");
         return 1;
     }
     float rpf_confidence_samples = std::isnan(rpf_confidence_samples_cli) ? render_config.rpf_confidence_samples : rpf_confidence_samples_cli;
-    if (rpf_confidence_samples <= 0.0f) {
-        spdlog::error("rpf_confidence_samples must be positive");
+    if (!std::isfinite(rpf_confidence_samples) || rpf_confidence_samples <= 0.0f) {
+        spdlog::error("rpf_confidence_samples must be finite and positive");
         return 1;
     }
     std::string tonemap_name = render_config.tonemap;
@@ -1836,7 +1842,7 @@ int main(int argc, char** argv) {
     spdlog::info("Output directory: {}", output_dir_path.string());
     spdlog::info("StatMC enabled: {}", render_config.use_statmc);
     spdlog::info("Color window radius: {}", render_config.color_window_radius);
-    spdlog::info("Variance-of-mean window radius: {}", render_config.var_window_radius);
+    spdlog::info("Sample-variance window radius: {}", render_config.var_window_radius);
     spdlog::info("Tonemap: {}", render_config.tonemap);
 
     try {

@@ -237,6 +237,13 @@ inline Vec3f material_albedo(const Material& material) {
     return std::visit([&](const auto& brdf) { return brdf.albedo; }, material.brdf);
 }
 
+/// @brief Reports whether the material uses a delta-distribution BRDF.
+/// @param material Material to inspect.
+/// @return True for ideal specular reflection.
+inline bool brdf_is_delta(const Material& material) {
+    return std::holds_alternative<Mirror>(material.brdf);
+}
+
 inline Vec3f brdf_eval(const Material& material, Vec3f wo_world, Vec3f wi_world, Vec3f normal) {
     return std::visit([&](const auto& brdf) { return brdf.eval(wo_world, wi_world, normal); }, material.brdf);
 }
@@ -247,4 +254,23 @@ inline float brdf_pdf(const Material& material, Vec3f wo_world, Vec3f wi_world, 
 
 inline std::tuple<Vec3f, float> brdf_sample(const Material& material, Vec3f wo_world, Vec3f normal, Vec2f u) {
     return std::visit([&](const auto& brdf) { return brdf.sample(wo_world, normal, u); }, material.brdf);
+}
+
+/// @brief Computes throughput for a direction sampled from the material BRDF.
+/// @param material Sampled material.
+/// @param wo_world Outgoing world-space direction.
+/// @param wi_world Sampled incoming world-space direction.
+/// @param normal Surface normal.
+/// @param pdf Sampling density returned by brdf_sample.
+/// @return Monte Carlo throughput multiplier.
+inline Vec3f brdf_sample_weight(
+    const Material& material,
+    Vec3f wo_world,
+    Vec3f wi_world,
+    Vec3f normal,
+    float pdf) {
+    if (pdf <= EPS_SMALL) return Vec3f::Zero();
+    if (brdf_is_delta(material)) return material_albedo(material);
+    return brdf_eval(material, wo_world, wi_world, normal) *
+        (std::max(0.0f, normal.dot(wi_world)) / pdf);
 }

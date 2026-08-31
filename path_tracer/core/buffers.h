@@ -11,6 +11,7 @@
 
 struct FrameBuffers {
     Image radiance;
+    Image raw_radiance;
     Image albedo;
     Image normal;
     Image world_pos;
@@ -29,6 +30,10 @@ struct FrameBuffers {
         std::vector<float> lens_conf;
         std::vector<float> light;
         std::vector<float> light_conf;
+        std::vector<float> light_uv;
+        std::vector<float> light_uv_conf;
+        std::vector<float> light_select;
+        std::vector<float> light_select_conf;
         std::vector<float> environment;
         std::vector<float> environment_conf;
         std::vector<float> rr;
@@ -50,6 +55,10 @@ struct FrameBuffers {
             lens_conf.assign(size, 0.0f);
             light.assign(size, 0.0f);
             light_conf.assign(size, 0.0f);
+            light_uv.assign(size, 0.0f);
+            light_uv_conf.assign(size, 0.0f);
+            light_select.assign(size, 0.0f);
+            light_select_conf.assign(size, 0.0f);
             environment.assign(size, 0.0f);
             environment_conf.assign(size, 0.0f);
             rr.assign(size, 0.0f);
@@ -98,34 +107,33 @@ struct FrameBuffers {
     Image denoised;
     std::vector<float> uncertainty;
     std::vector<float> alpha;
-    std::vector<float> var_mean_denoised;
+    std::vector<float> variance_denoised;
     std::vector<float> var_total_debug;
     std::vector<float> var_eff_debug;
     std::vector<float> var_ratio_debug;
     std::vector<float> depth;
     std::vector<float> sensitivity_confidence;
     std::vector<float> sensitivity_gradient;
-    std::vector<float> light_visibility;
     std::vector<float> adaptive_importance;
     std::vector<int> hit_count;
     std::vector<int> sample_count;
 
     void init(int w, int h) {
         radiance = Image(w, h);
+        raw_radiance = Image(w, h);
         albedo = Image(w, h);
         normal = Image(w, h);
         world_pos = Image(w,h);
         denoised = Image(w, h);
         uncertainty.assign(w * h, 0.0f);
         alpha.assign(w * h, 0.0f);
-        var_mean_denoised.assign(w * h, 0.0f);
+        variance_denoised.assign(w * h, 0.0f);
         var_total_debug.assign(w * h, 0.0f);
         var_eff_debug.assign(w * h, 0.0f);
         var_ratio_debug.assign(w * h, 0.0f);
         depth.assign(w * h, 0.0f);
         sensitivity_confidence.assign(w * h, 0.0f);
         sensitivity_gradient.assign(w * h, 0.0f);
-        light_visibility.assign(w * h, 0.0f);
         adaptive_importance.assign(w * h, 0.0f);
         hit_count.assign(w * h, 0);
         sample_count.assign(w * h, 0);
@@ -208,19 +216,22 @@ inline bool output_buffers(const FrameBuffers& fb, const std::string& directory,
     ok &= save_image_if_valid(fb.radiance, ".hdr");
 
     if (statmc) {
+        ok &= save_image_if_valid(fb.raw_radiance, "_raw.png", true);
+        ok &= save_image_if_valid(fb.raw_radiance, "_raw.hdr");
         ok &= save_scalar_buffer(fb.sensitivity_tiles.expand(fb.radiance.width, fb.radiance.height), "_sensitivity.hdr");
         ok &= save_scalar_buffer(fb.sensitivity_tiles.expand_values(fb.sensitivity_tiles.pixel, fb.radiance.width, fb.radiance.height), "_sensitivity_pixel.hdr");
         ok &= save_scalar_buffer(fb.sensitivity_tiles.expand_values(fb.sensitivity_tiles.brdf, fb.radiance.width, fb.radiance.height), "_sensitivity_brdf.hdr");
         ok &= save_scalar_buffer(fb.sensitivity_tiles.expand_values(fb.sensitivity_tiles.lens, fb.radiance.width, fb.radiance.height), "_sensitivity_lens.hdr");
         ok &= save_scalar_buffer(fb.sensitivity_tiles.expand_values(fb.sensitivity_tiles.light, fb.radiance.width, fb.radiance.height), "_sensitivity_light.hdr");
+        ok &= save_scalar_buffer(fb.sensitivity_tiles.expand_values(fb.sensitivity_tiles.light_uv, fb.radiance.width, fb.radiance.height), "_sensitivity_light_uv.hdr");
+        ok &= save_scalar_buffer(fb.sensitivity_tiles.expand_values(fb.sensitivity_tiles.light_select, fb.radiance.width, fb.radiance.height), "_sensitivity_light_select.hdr");
         ok &= save_scalar_buffer(fb.sensitivity_tiles.expand_values(fb.sensitivity_tiles.environment, fb.radiance.width, fb.radiance.height), "_sensitivity_environment.hdr");
         ok &= save_scalar_buffer(fb.sensitivity_tiles.expand_values(fb.sensitivity_tiles.rr, fb.radiance.width, fb.radiance.height), "_sensitivity_rr.hdr");
         ok &= save_scalar_buffer(fb.sensitivity_confidence, "_sensitivity_confidence.hdr");
         ok &= save_scalar_buffer(fb.sensitivity_gradient, "_sensitivity_gradient.hdr");
-        ok &= save_scalar_buffer(fb.light_visibility, "_light_visibility.hdr");
         ok &= save_scalar_buffer(fb.uncertainty, "_uncertainty.hdr");
         ok &= save_scalar_buffer(fb.alpha, "_alpha.hdr");
-        ok &= save_scalar_buffer(fb.var_mean_denoised, "_vardenoised.hdr");
+        ok &= save_scalar_buffer(fb.variance_denoised, "_vardenoised.hdr");
         ok &= save_scalar_buffer(fb.adaptive_importance, "_adaptive_importance.hdr");
         ok &= save_scalar_buffer(normalized_sample_counts(fb.sample_count), "_sample_fraction.hdr");
     }

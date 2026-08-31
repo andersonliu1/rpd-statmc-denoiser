@@ -10,8 +10,6 @@ struct PixelStats {
     Vec3f color_mean = Vec3f::Zero();
     Vec3f sqrt_color_mean = Vec3f::Zero();
     Vec3f sqrt_color_square_diff = Vec3f::Zero();
-    float light_visibility_sum = 0.0f;
-    int light_visibility_n = 0;
 
     float variance() const {
         return (n > 1) ? square_diff / float(n - 1) : 0.0f;
@@ -22,19 +20,6 @@ struct PixelStats {
         return sqrt_color_square_diff / float(n - 1);
     }
 
-    void accumulate_light_visibility(bool visible) {
-        light_visibility_sum += visible ? 1.0f : 0.0f;
-        ++light_visibility_n;
-    }
-
-    float light_visibility_mean() const {
-        return (light_visibility_sum + 1.0f) / float(light_visibility_n + 2);
-    }
-
-    float light_visibility_variance() const {
-        const float p = light_visibility_mean();
-        return p * (1.0f - p) / float(light_visibility_n + 3);
-    }
 };
 
 static void accumulate_sample(PixelStats& s, const Vec3f& luminance) {
@@ -64,65 +49,46 @@ namespace rpf {
         return random / std::max(EPS_SMALL, random + screen);
     }
 
-    template <int BinCount>
-    struct BinaryMutualInformation {
-        std::array<double, BinCount * 2> joint{};
-        double w_sum = 0.0;
-        double w2_sum = 0.0;
-
-        void add(int bin, bool value, float w = 1.0f) {
-            if (w <= EPS_SMALL) return;
-            const int clamped_bin = std::clamp(bin, 0, BinCount - 1);
-            joint[2 * clamped_bin + (value ? 1 : 0)] += static_cast<double>(w);
-            w_sum += static_cast<double>(w);
-            w2_sum += static_cast<double>(w) * static_cast<double>(w);
+    /// @brief Finds reliable dependency shared by the same random dimension.
+    /// @param lhs Per-dimension reliability at the center pixel.
+    /// @param rhs Per-dimension reliability at the neighbor pixel.
+    /// @return Greatest pairwise minimum across dimensions.
+    template <size_t DimensionCount>
+    inline float shared_reliability(
+        const std::array<float, DimensionCount>& lhs,
+        const std::array<float, DimensionCount>& rhs) {
+        float shared = 0.0f;
+        for (size_t i = 0; i < lhs.size(); ++i) {
+            shared = std::max(shared, std::min(lhs[i], rhs[i]));
         }
+        return std::clamp(shared, 0.0f, 1.0f);
+    }
 
-        float compute_sensitivity() const {
-            constexpr double kEps = 1e-18;
-            const double effective_n = w_sum * w_sum / std::max(kEps, w2_sum);
-            if (effective_n <= 1.0) return 0.0f;
+    /// @brief Relaxes a StatMC compatibility score where a random driver is shared.
+    /// @param score Original non-negative compatibility score.
+    /// @param pair_reliability Reliable dependency shared by the pixel pair.
+    /// @param scale Non-negative RPD strength; zero disables the adjustment.
+    /// @return Relaxed compatibility score.
+    inline double relax_compatibility(
+        double score,
+        float pair_reliability,
+        float scale) {
+        const float adjustment = std::clamp(scale * pair_reliability, 0.0f, 1.0f);
+        return score / (1.0 + static_cast<double>(adjustment));
+    }
 
-            std::array<double, BinCount> x_mass{};
-            double y_mass[2] = {0.0, 0.0};
-            int active_x = 0;
-            for (int bin = 0; bin < BinCount; ++bin) {
-                x_mass[bin] = joint[2 * bin] + joint[2 * bin + 1];
-                if (x_mass[bin] > kEps) ++active_x;
-                y_mass[0] += joint[2 * bin];
-                y_mass[1] += joint[2 * bin + 1];
-            }
-            if (active_x < 2 || y_mass[0] <= kEps || y_mass[1] <= kEps) return 0.0f;
-
-            double mutual_information = 0.0;
-            for (int bin = 0; bin < BinCount; ++bin) {
-                for (int value = 0; value < 2; ++value) {
-                    const double mass = joint[2 * bin + value];
-                    if (mass <= kEps) continue;
-                    mutual_information += (mass / w_sum) *
-                        std::log((mass * w_sum) / (x_mass[bin] * y_mass[value]));
-                }
-            }
-
-            const double bias = double(active_x - 1) / (2.0 * effective_n);
-            const double corrected_mi = std::max(0.0, mutual_information - bias);
-            const double p0 = y_mass[0] / w_sum;
-            const double p1 = y_mass[1] / w_sum;
-            const double entropy_y = -p0 * std::log(p0) - p1 * std::log(p1);
-            return static_cast<float>(std::sqrt(std::clamp(corrected_mi / std::max(kEps, entropy_y), 0.0, 1.0)));
-        }
-
-        void reset() {
-            joint.fill(0.0);
-            w_sum = w2_sum = 0.0;
-        }
-
-        void merge(const BinaryMutualInformation& other) {
-            for (int i = 0; i < BinCount * 2; ++i) joint[i] += other.joint[i];
-            w_sum += other.w_sum;
-            w2_sum += other.w2_sum;
-        }
-    };
+    /// @brief Conservatively raises an underestimated variance toward its neighbors.
+    /// @param value Current variance estimate.
+    /// @param neighbor Local compatible-neighbor estimate.
+    /// @param stabilizer Positive shrinkage stabilizer.
+    /// @return Upward-only variance estimate.
+    inline float conservative_variance_update(float value, float neighbor, float stabilizer) {
+        const float blend = std::clamp(
+            std::max(0.0f, neighbor - value) /
+                std::max(EPS_SMALL, value + neighbor + stabilizer),
+            0.0f, 1.0f);
+        return lerp(value, neighbor, blend);
+    }
 
     template <int BinCount>
     struct BinnedDependency {
@@ -218,75 +184,98 @@ namespace rpf {
     struct Tile {
         Dependency2D<> pixel;
         Dependency2D<> brdf;
+        Dependency2D<> screen_brdf;
         Dependency2D<> lens;
+        Dependency2D<> screen_lens;
         Dependency2D<> light_uv;
+        Dependency2D<> screen_light_uv;
         Dependency2D<> environment;
+        Dependency2D<> screen_environment;
         // ponytail: 16 light categories; use sparse categories for larger scenes.
         BinnedDependency<LIGHT_CATEGORY_BINS> light_select;
-        BinaryMutualInformation<16> light_uv_visibility;
-        BinaryMutualInformation<LIGHT_CATEGORY_BINS> light_select_visibility;
-        BinaryMutualInformation<16> environment_visibility;
+        Dependency2D<> screen_light_select;
         BinnedDependency<2> rr;
+        Dependency2D<> screen_rr;
 
         void reset() {
             pixel.reset();
             brdf.reset();
+            screen_brdf.reset();
             lens.reset();
+            screen_lens.reset();
             light_uv.reset();
+            screen_light_uv.reset();
             environment.reset();
+            screen_environment.reset();
             light_select.reset();
-            light_uv_visibility.reset();
-            light_select_visibility.reset();
-            environment_visibility.reset();
+            screen_light_select.reset();
             rr.reset();
+            screen_rr.reset();
         }
 
         void merge(const Tile& other) {
             pixel.merge(other.pixel);
             brdf.merge(other.brdf);
+            screen_brdf.merge(other.screen_brdf);
             lens.merge(other.lens);
+            screen_lens.merge(other.screen_lens);
             light_uv.merge(other.light_uv);
+            screen_light_uv.merge(other.screen_light_uv);
             environment.merge(other.environment);
+            screen_environment.merge(other.screen_environment);
             light_select.merge(other.light_select);
-            light_uv_visibility.merge(other.light_uv_visibility);
-            light_select_visibility.merge(other.light_select_visibility);
-            environment_visibility.merge(other.environment_visibility);
+            screen_light_select.merge(other.screen_light_select);
             rr.merge(other.rr);
+            screen_rr.merge(other.screen_rr);
         }
 
         struct SplitSensitivity {
             float pixel = 0.0f;
             float brdf = 0.0f;
+            float screen_brdf = 0.0f;
             float lens = 0.0f;
-            float light = 0.0f;
+            float screen_lens = 0.0f;
+            float light_uv = 0.0f;
+            float screen_light_uv = 0.0f;
+            float light_select = 0.0f;
+            float screen_light_select = 0.0f;
             float environment = 0.0f;
+            float screen_environment = 0.0f;
             float rr = 0.0f;
+            float screen_rr = 0.0f;
         };
 
         struct SplitConfidence {
             float pixel = 0.0f;
             float brdf = 0.0f;
+            float screen_brdf = 0.0f;
             float lens = 0.0f;
-            float light = 0.0f;
+            float screen_lens = 0.0f;
+            float light_uv = 0.0f;
+            float screen_light_uv = 0.0f;
+            float light_select = 0.0f;
+            float screen_light_select = 0.0f;
             float environment = 0.0f;
+            float screen_environment = 0.0f;
             float rr = 0.0f;
+            float screen_rr = 0.0f;
         };
 
         SplitSensitivity computeSplitSensitivity() const {
             SplitSensitivity s;
             s.pixel = pixel.compute_sensitivity();
             s.brdf = brdf.compute_sensitivity();
+            s.screen_brdf = screen_brdf.compute_sensitivity();
             s.lens = lens.compute_sensitivity();
-            const float light_uv_s = light_uv.compute_sensitivity();
-            const float light_select_s = light_select.compute_sensitivity();
-            const float visibility_s = std::max(
-                light_uv_visibility.compute_sensitivity(),
-                light_select_visibility.compute_sensitivity());
-            s.light = std::max({light_uv_s, light_select_s, visibility_s});
-            s.environment = std::max(
-                environment.compute_sensitivity(),
-                environment_visibility.compute_sensitivity());
+            s.screen_lens = screen_lens.compute_sensitivity();
+            s.light_uv = light_uv.compute_sensitivity();
+            s.screen_light_uv = screen_light_uv.compute_sensitivity();
+            s.light_select = light_select.compute_sensitivity();
+            s.screen_light_select = screen_light_select.compute_sensitivity();
+            s.environment = environment.compute_sensitivity();
+            s.screen_environment = screen_environment.compute_sensitivity();
             s.rr = rr.compute_sensitivity();
+            s.screen_rr = screen_rr.compute_sensitivity();
             return s;
         }
 
@@ -298,12 +287,17 @@ namespace rpf {
             };
             c.pixel = confidence(pixel.sample_mass());
             c.brdf = confidence(brdf.sample_mass());
+            c.screen_brdf = confidence(screen_brdf.sample_mass());
             c.lens = confidence(lens.sample_mass());
-            const float light_uv_c = confidence(light_uv.sample_mass());
-            const float light_select_c = confidence(light_select.sample_mass());
-            c.light = std::max(light_uv_c, light_select_c);
+            c.screen_lens = confidence(screen_lens.sample_mass());
+            c.light_uv = confidence(light_uv.sample_mass());
+            c.screen_light_uv = confidence(screen_light_uv.sample_mass());
+            c.light_select = confidence(light_select.sample_mass());
+            c.screen_light_select = confidence(screen_light_select.sample_mass());
             c.environment = confidence(environment.sample_mass());
+            c.screen_environment = confidence(screen_environment.sample_mass());
             c.rr = confidence(rr.sample_mass());
+            c.screen_rr = confidence(screen_rr.sample_mass());
             return c;
         }
     };
@@ -342,18 +336,12 @@ struct Sample {
     Vec2f light_u = Vec2f::Zero();
     Vec2f environment_u = Vec2f::Zero();
     bool rr_survived = false;
-    bool light_select_visible = false;
-    bool light_uv_visible = false;
-    bool environment_visible = false;
     bool pixel_valid = false;
     bool lens_valid = false;
     bool light_select_valid = false;
     bool brdf_valid = false;
     bool light_valid = false;
-    bool light_select_visibility_valid = false;
-    bool light_uv_visibility_valid = false;
     bool environment_valid = false;
-    bool environment_visibility_valid = false;
     bool rr_valid = false;
 
     bool capture_pixel(const Vec2f& u) {
@@ -384,31 +372,10 @@ struct Sample {
         return true;
     }
 
-    bool capture_light_select_visibility(bool visible) {
-        if (light_select_visibility_valid) return false;
-        light_select_visible = visible;
-        light_select_visibility_valid = true;
-        return true;
-    }
-
-    bool capture_light_uv_visibility(bool visible) {
-        if (light_uv_visibility_valid) return false;
-        light_uv_visible = visible;
-        light_uv_visibility_valid = true;
-        return true;
-    }
-
     bool capture_environment(const Vec2f& u) {
         if (environment_valid) return false;
         environment_u = u;
         environment_valid = true;
-        return true;
-    }
-
-    bool capture_environment_visibility(bool visible) {
-        if (environment_visibility_valid) return false;
-        environment_visible = visible;
-        environment_visibility_valid = true;
         return true;
     }
 
