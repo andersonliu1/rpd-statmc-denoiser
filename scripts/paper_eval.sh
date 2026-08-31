@@ -12,6 +12,7 @@ REFERENCE_SEED2=99992
 REFERENCE_CHECK=true
 REPRESENTATIVE_SEED=""
 SCENE_LABEL=""
+RPD_SCALE=1
 
 usage() {
     cat <<EOF
@@ -32,6 +33,7 @@ Options:
   --reference-seed2 N          Independent reference seed (default: ${REFERENCE_SEED2})
   --representative-seed N      Seed used for paper images (default: first seed)
   --scene-label NAME           Stable scene name for reports/assets
+  --rpd-scale T                RPD compatibility-relaxation scale (>0, default: ${RPD_SCALE})
   --no-reference-check         Skip the second independent reference
   -h, --help                   Show this help
 
@@ -52,6 +54,7 @@ while [[ $# -gt 0 ]]; do
         --reference-seed2) REFERENCE_SEED2="$2"; shift 2 ;;
         --representative-seed) REPRESENTATIVE_SEED="$2"; shift 2 ;;
         --scene-label) SCENE_LABEL="$2"; shift 2 ;;
+        --rpd-scale) RPD_SCALE="$2"; shift 2 ;;
         --no-reference-check) REFERENCE_CHECK=false; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown option: $1" >&2; usage >&2; exit 1 ;;
@@ -60,6 +63,10 @@ done
 
 [[ -n "$CONFIG" ]] || { echo "Missing --config" >&2; usage >&2; exit 1; }
 [[ -f "$CONFIG" ]] || { echo "Config not found: $CONFIG" >&2; exit 1; }
+[[ "$RPD_SCALE" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]] && awk -v value="$RPD_SCALE" 'BEGIN { exit !(value > 0) }' || {
+    echo "--rpd-scale must be a positive number" >&2
+    exit 1
+}
 
 yaml_int() {
     awk -v key="$1:" '$1 == key { gsub(/\r/, "", $2); print $2; exit }' "$CONFIG"
@@ -129,6 +136,7 @@ fi
     echo "reference_seed2=$REFERENCE_SEED2"
     echo "reference_check=$REFERENCE_CHECK"
     echo "representative_seed=$REPRESENTATIVE_SEED"
+    echo "rpd_scale=$RPD_SCALE"
 } > "$OUTPUT_ROOT/manifest.txt"
 
 ./run.sh -t path_tracer -B "$BUILD_DIR" --parallel
@@ -179,9 +187,9 @@ for seed_index in "${!seed_list[@]}"; do
     render "uniform_seed${seed}" --seed "$seed" --spp "$UNIFORM_SPP" --no-statmc
     if (( seed_index % 2 == 0 )); then
         render "statmc_no_rpd_seed${seed}" --seed "$seed" --statmc --rpf-shrinkage-scale 0
-        render "statmc_rpd_seed${seed}" --seed "$seed" --statmc --rpf-shrinkage-scale 1
+        render "statmc_rpd_seed${seed}" --seed "$seed" --statmc --rpf-shrinkage-scale "$RPD_SCALE"
     else
-        render "statmc_rpd_seed${seed}" --seed "$seed" --statmc --rpf-shrinkage-scale 1
+        render "statmc_rpd_seed${seed}" --seed "$seed" --statmc --rpf-shrinkage-scale "$RPD_SCALE"
         render "statmc_no_rpd_seed${seed}" --seed "$seed" --statmc --rpf-shrinkage-scale 0
     fi
     cmp "$OUTPUT_ROOT/statmc_no_rpd_seed${seed}/statmc_no_rpd_seed${seed}_raw.hdr" \
@@ -371,6 +379,7 @@ NR > 1 {
     echo "Revision: $(git rev-parse HEAD)"
     echo "Working-tree diff: $working_tree_diff_sha256"
     echo "Representative seed: $REPRESENTATIVE_SEED"
+    echo "RPD scale: $RPD_SCALE"
     echo "Reference: ${scene}_reference.png"
     echo "Methods: ${scene}_uniform.png, ${scene}_adaptive_raw.png, ${scene}_statmc_no_rpd.png, ${scene}_statmc_rpd.png"
     echo "Raw StatMC: ${scene}_statmc_{no_rpd,rpd}_raw.png (must match exactly)"

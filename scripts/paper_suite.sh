@@ -6,6 +6,7 @@ BUILD_DIR="build/path_tracer_build"
 SEEDS="101,202,303,404,505,606,707,808"
 REFERENCE_SPP=512
 PAPER_ASSETS_DIR="paper/images/generated"
+RPD_SCALE=1
 SMOKE=false
 RESCORE=false
 OUTPUT_ROOT_EXPLICIT=false
@@ -23,6 +24,7 @@ Options:
   --seeds CSV             Paired seeds (default: ${SEEDS})
   --reference-spp N       Spp for independent references (default: ${REFERENCE_SPP})
   --paper-assets-dir DIR  Installed paper images (default: ${PAPER_ASSETS_DIR})
+  --rpd-scale T           RPD compatibility-relaxation scale (>0, default: ${RPD_SCALE})
   --smoke                  Validate only: one seed, 128px, 64-spp references
   --rescore                Reuse existing renders; recompute dual-reference metrics
   -h, --help               Show this help
@@ -36,6 +38,7 @@ while [[ $# -gt 0 ]]; do
         --seeds) SEEDS="$2"; shift 2 ;;
         --reference-spp) REFERENCE_SPP="$2"; shift 2 ;;
         --paper-assets-dir) PAPER_ASSETS_DIR="$2"; shift 2 ;;
+        --rpd-scale) RPD_SCALE="$2"; shift 2 ;;
         --smoke) SMOKE=true; shift ;;
         --rescore) RESCORE=true; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -87,7 +90,8 @@ if [[ "$RESCORE" == false ]]; then
             --scene-label "$name" \
             --seeds "$SEEDS" \
             --uniform-spp "$spp" \
-            --reference-spp "$REFERENCE_SPP"
+            --reference-spp "$REFERENCE_SPP" \
+            --rpd-scale "$RPD_SCALE"
     }
 
     run_scene cornell "$CORNELL_CONFIG" 16
@@ -106,6 +110,7 @@ render_diff_sha256=""
 render_seeds=""
 render_representative_seed=""
 render_reference_spp=""
+render_rpd_scale=""
 for name in cornell bunny_dof dragon; do
     manifest="$OUTPUT_ROOT/$name/manifest.txt"
     scene_revision="$(awk -F= '$1 == "revision" { print $2; exit }' "$manifest")"
@@ -113,7 +118,9 @@ for name in cornell bunny_dof dragon; do
     scene_seeds="$(awk -F= '$1 == "seeds" { print $2; exit }' "$manifest")"
     scene_representative_seed="$(awk -F= '$1 == "representative_seed" { print $2; exit }' "$manifest")"
     scene_reference_spp="$(awk -F= '$1 == "reference_spp" { print $2; exit }' "$manifest")"
-    [[ -n "$scene_revision" && -n "$scene_diff_sha256" && -n "$scene_seeds" && -n "$scene_representative_seed" && -n "$scene_reference_spp" ]] || {
+    scene_rpd_scale="$(awk -F= '$1 == "rpd_scale" { print $2; exit }' "$manifest")"
+    scene_rpd_scale="${scene_rpd_scale:-1}"
+    [[ -n "$scene_revision" && -n "$scene_diff_sha256" && -n "$scene_seeds" && -n "$scene_representative_seed" && -n "$scene_reference_spp" && -n "$scene_rpd_scale" ]] || {
         echo "Incomplete provenance: $manifest" >&2
         exit 1
     }
@@ -123,7 +130,8 @@ for name in cornell bunny_dof dragon; do
         render_seeds="$scene_seeds"
         render_representative_seed="$scene_representative_seed"
         render_reference_spp="$scene_reference_spp"
-    elif [[ "$scene_revision" != "$render_revision" || "$scene_diff_sha256" != "$render_diff_sha256" || "$scene_seeds" != "$render_seeds" || "$scene_representative_seed" != "$render_representative_seed" || "$scene_reference_spp" != "$render_reference_spp" ]]; then
+        render_rpd_scale="$scene_rpd_scale"
+    elif [[ "$scene_revision" != "$render_revision" || "$scene_diff_sha256" != "$render_diff_sha256" || "$scene_seeds" != "$render_seeds" || "$scene_representative_seed" != "$render_representative_seed" || "$scene_reference_spp" != "$render_reference_spp" || "$scene_rpd_scale" != "$render_rpd_scale" ]]; then
         echo "Mixed render revisions in $OUTPUT_ROOT" >&2
         exit 1
     fi
@@ -218,6 +226,7 @@ fi
     echo "Seeds: $render_seeds"
     echo "Representative seed: $render_representative_seed"
     echo "Reference spp: $render_reference_spp"
+    echo "RPD scale: $render_rpd_scale"
     echo "Images are ready under: $OUTPUT_ROOT/paper_assets"
     echo "Combined metrics: $OUTPUT_ROOT/all_results.csv"
     echo "Dual-reference metrics: $OUTPUT_ROOT/all_rescore_summary.csv"

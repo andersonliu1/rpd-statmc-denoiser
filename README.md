@@ -166,6 +166,19 @@ DOF, and Dragon benchmark, then aggregates their metrics:
 ./scripts/paper_suite.sh
 ```
 
+The suite defaults to RPD scale `1`. After choosing a scale on separate tuning
+renders, preserve the tuning output and evaluate that fixed choice with fresh
+seeds, for example:
+
+```bash
+./scripts/paper_suite.sh \
+  --rpd-scale 0.25 \
+  --seeds 1001,2002,3003,4004,5005,6006,7007,8008 \
+  --output-root output/paper_eval/rpd_scale_025_heldout
+```
+
+The selected scale is recorded in every scene manifest and suite README.
+
 Combined CSVs are written under `output/paper_eval/final/`. Validate the workflow
 quickly with `./scripts/paper_suite.sh --smoke`; smoke outputs stay under
 `output/paper_eval/smoke/`.
