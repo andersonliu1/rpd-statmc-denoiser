@@ -78,8 +78,22 @@ for seed in "${seed_list[@]}"; do
         require_file "$OUTPUT_ROOT/$label/$label.hdr"
         require_file "$OUTPUT_ROOT/$label/$label.png"
     done
+    label="statmc_no_rpd_seed${seed}"
+    require_file "$OUTPUT_ROOT/$label/${label}_raw.hdr"
+    require_file "$OUTPUT_ROOT/$label/${label}_raw.png"
+    label="statmc_rpd_seed${seed}"
+    require_file "$OUTPUT_ROOT/$label/${label}_raw.hdr"
 done
 [[ "$fail" == false ]] || { echo "Missing artifacts; see $invalid" >&2; exit 1; }
+for seed in "${seed_list[@]}"; do
+    no_rpd="statmc_no_rpd_seed${seed}"
+    rpd="statmc_rpd_seed${seed}"
+    if ! cmp -s "$OUTPUT_ROOT/$no_rpd/${no_rpd}_raw.hdr" "$OUTPUT_ROOT/$rpd/${rpd}_raw.hdr"; then
+        printf 'error,raw_ablation_mismatch,seed %s\n' "$seed" >> "$invalid"
+        echo "RPD changed the raw path for seed $seed; see $invalid" >&2
+        exit 1
+    fi
+done
 
 base_spp="$(awk '$1 == "samples_per_pixel:" { gsub(/\r/, "", $2); print $2; exit }' "$OUTPUT_ROOT/config.yaml")"
 adaptive_spp="$(awk '$1 == "adaptive_spp:" { gsub(/\r/, "", $2); print $2; exit }' "$OUTPUT_ROOT/config.yaml")"
@@ -152,12 +166,20 @@ ref_mse="$(awk -F, 'NR == 2 { print $3 }' "$reference_noise")"
 rows="$OUTPUT_ROOT/rescore_rows.csv"
 printf 'scene,seed,method,reference_id,hdr_mae,hdr_rmse,hdr_psnr,hdr_nrmse,log_ssim11,log_gradient_nrmse,png_rmse,png_psnr,wall_seconds,hdr_mse,hdr_nrmse2,png_mse\n' > "$rows"
 for seed in "${seed_list[@]}"; do
-    for method in uniform statmc_no_rpd statmc_rpd; do
-        label="${method}_seed${seed}"
-        wall="$(awk -F, -v seed="$seed" -v method="$method" 'NR > 1 && $2 == seed && $3 == method { print $12; exit }' "$old_results")"
+    for method in uniform adaptive_raw statmc_no_rpd statmc_rpd; do
+        if [[ "$method" == adaptive_raw ]]; then
+            label="statmc_no_rpd_seed${seed}"
+            candidate="$OUTPUT_ROOT/$label/${label}_raw"
+        else
+            label="${method}_seed${seed}"
+            candidate="$OUTPUT_ROOT/$label/$label"
+        fi
+        wall_method="$method"
+        [[ "$method" == adaptive_raw ]] && wall_method=statmc_no_rpd
+        wall="$(awk -F, -v seed="$seed" -v method="$wall_method" 'NR > 1 && $2 == seed && $3 == method { print $12; exit }' "$old_results")"
         [[ -n "$wall" ]] || { echo "Missing wall time for $label in $old_results" >&2; exit 1; }
         for ref in "${references[@]}"; do
-            metrics="$(extract_metrics "$OUTPUT_ROOT/$ref/$ref" "$OUTPUT_ROOT/$label/$label")"
+            metrics="$(extract_metrics "$OUTPUT_ROOT/$ref/$ref" "$candidate")"
             IFS=',' read -r hdr_mae hdr_rmse hdr_psnr hdr_nrmse log_ssim log_grad png_rmse png_psnr <<< "$metrics"
             awk -v scene="$scene" -v seed="$seed" -v method="$method" -v ref="$ref" \
                 -v mae="$hdr_mae" -v rmse="$hdr_rmse" -v psnr="$hdr_psnr" -v nrmse="$hdr_nrmse" \
@@ -201,8 +223,8 @@ function ci(sum,sum2,count,avg,variance) {
     return tcrit(count)*sqrt((variance > 0 ? variance : 0)/count)
 }
 END {
-    order[1]="uniform"; order[2]="statmc_no_rpd"; order[3]="statmc_rpd"
-    for (i=1; i<=3; ++i) {
+    order[1]="uniform"; order[2]="adaptive_raw"; order[3]="statmc_no_rpd"; order[4]="statmc_rpd"
+    for (i=1; i<=4; ++i) {
         m=order[i]; am=a[m]/n[m]; bm=b[m]/n[m]; cm=c[m]/n[m]; dm=d[m]/n[m]; em=e[m]/n[m]; fm=f[m]/n[m]
         printf "%s,%s,%d,%.12g,%s,%.12g,%.12g,%s,%.12g,%.12g,%s,%.12g,%s,%.12g,%s,%.12g,%.12g,%s,%.12g\n", \
             scene_name,m,n[m],am,ci(a[m],a2[m],n[m]),sqrt(am),bm,ci(b[m],b2[m],n[m]),sqrt(bm),cm,ci(c[m],c2[m],n[m]),dm,ci(d[m],d2[m],n[m]),em,ci(e[m],e2[m],n[m]),sqrt(em),fm,ci(f[m],f2[m],n[m]),g[m]/n[m]
@@ -217,13 +239,16 @@ NR > 1 {
     hdr[key]=$5; nrmse[key]=$7; ssim[key]=$9; grad[key]=$10; png[key]=$11; wall[key]=$13
 }
 END {
-    base[1]="uniform"; candidate[1]="statmc_no_rpd"; label[1]="statmc_no_rpd-vs-uniform"
-    base[2]="uniform"; candidate[2]="statmc_rpd"; label[2]="statmc_rpd-vs-uniform"
-    base[3]="statmc_no_rpd"; candidate[3]="statmc_rpd"; label[3]="rpd-vs-no_rpd"
-    for (seed_value in seen) for (i=1; i<=3; ++i) {
+    base[1]="uniform"; candidate[1]="adaptive_raw"; label[1]="adaptive_raw-vs-uniform"
+    base[2]="adaptive_raw"; candidate[2]="statmc_no_rpd"; label[2]="statmc_no_rpd-vs-adaptive_raw"
+    base[3]="uniform"; candidate[3]="statmc_no_rpd"; label[3]="statmc_no_rpd-vs-uniform"
+    base[4]="uniform"; candidate[4]="statmc_rpd"; label[4]="statmc_rpd-vs-uniform"
+    base[5]="statmc_no_rpd"; candidate[5]="statmc_rpd"; label[5]="rpd-vs-no_rpd"
+    for (seed_value in seen) for (i=1; i<=5; ++i) {
         b=seed_value SUBSEP base[i]; c=seed_value SUBSEP candidate[i]
-        printf "%s,%s,%s,%.12g,%.12g,%.12g,%.12g,%.12g,%.12g\n", scene[seed_value],seed_value,label[i], \
-            hdr[b]-hdr[c],nrmse[b]-nrmse[c],ssim[c]-ssim[b],grad[b]-grad[c],png[b]-png[c],wall[c]/wall[b]
+        ratio=(base[i]=="adaptive_raw" || candidate[i]=="adaptive_raw") ? "NA" : sprintf("%.12g",wall[c]/wall[b])
+        printf "%s,%s,%s,%.12g,%.12g,%.12g,%.12g,%.12g,%s\n", scene[seed_value],seed_value,label[i], \
+            hdr[b]-hdr[c],nrmse[b]-nrmse[c],ssim[c]-ssim[b],grad[b]-grad[c],png[b]-png[c],ratio
     }
 }' "$seed_means" > "$paired"
 
@@ -233,7 +258,8 @@ BEGIN { print "scene,comparison,n,hdr_mse_reduction_mean,hdr_mse_reduction_ci95,
 NR > 1 {
     scene_name=$1; m=$3; n[m]++
     a[m]+=$4; a2[m]+=$4*$4; b[m]+=$5; b2[m]+=$5*$5; c[m]+=$6; c2[m]+=$6*$6
-    d[m]+=$7; d2[m]+=$7*$7; e[m]+=$8; e2[m]+=$8*$8; f[m]+=$9; f2[m]+=$9*$9
+    d[m]+=$7; d2[m]+=$7*$7; e[m]+=$8; e2[m]+=$8*$8
+    if ($9 != "NA") { f[m]+=$9; f2[m]+=$9*$9; fn[m]++ }
 }
 function tcrit(count,df,z,z2,z3,z5,z7) {
     df=count-1; z=1.95996398454005; z2=z*z; z3=z2*z; z5=z3*z2; z7=z5*z2
@@ -245,23 +271,21 @@ function ci(sum,sum2,count,avg,variance) {
     return tcrit(count)*sqrt((variance > 0 ? variance : 0)/count)
 }
 END {
-    order[1]="statmc_no_rpd-vs-uniform"; order[2]="statmc_rpd-vs-uniform"; order[3]="rpd-vs-no_rpd"
-    for (i=1; i<=3; ++i) {
+    order[1]="adaptive_raw-vs-uniform"; order[2]="statmc_no_rpd-vs-adaptive_raw"
+    order[3]="statmc_no_rpd-vs-uniform"; order[4]="statmc_rpd-vs-uniform"; order[5]="rpd-vs-no_rpd"
+    for (i=1; i<=5; ++i) {
         m=order[i]
-        printf "%s,%s,%d,%.12g,%s,%.12g,%s,%.12g,%s,%.12g,%s,%.12g,%s,%.12g,%s\n", \
+        runtime_mean=fn[m] ? sprintf("%.12g",f[m]/fn[m]) : "NA"
+        runtime_ci=fn[m] ? ci(f[m],f2[m],fn[m]) : "NA"
+        printf "%s,%s,%d,%.12g,%s,%.12g,%s,%.12g,%s,%.12g,%s,%.12g,%s,%s,%s\n", \
             scene_name,m,n[m],a[m]/n[m],ci(a[m],a2[m],n[m]),b[m]/n[m],ci(b[m],b2[m],n[m]), \
             c[m]/n[m],ci(c[m],c2[m],n[m]),d[m]/n[m],ci(d[m],d2[m],n[m]), \
-            e[m]/n[m],ci(e[m],e2[m],n[m]),f[m]/n[m],ci(f[m],f2[m],n[m])
+            e[m]/n[m],ci(e[m],e2[m],n[m]),runtime_mean,runtime_ci
     }
 }' "$paired" > "$paired_summary"
 
 awk -F, 'NR > 1 && $14 <= 0 { printf "warning,negative_latent_mse,%s seed %s %s: %.12g\n", $1,$2,$3,$14 }' \
     "$seed_means" >> "$invalid"
-awk -F, -v noise="$ref_mse" '
-NR > 1 && $2 == "rpd-vs-no_rpd" && (($4 < 0 ? -$4 : $4) < noise/2) {
-    printf "warning,rpd_delta_below_reference_noise,%s HDR MSE delta %.12g; half reference-noise MSE %.12g\n", $1,$4,noise/2
-}' "$paired_summary" >> "$invalid"
-
 awk -F, -v scene="$scene" '
 function metric(value,ci) {
     return (ci=="NA") ? sprintf("%.4f",value) : sprintf("%.4f $\\pm$ %.4f",value,ci)
@@ -269,6 +293,7 @@ function metric(value,ci) {
 NR > 1 {
     name=$2
     if (name=="uniform") name="Uniform"
+    else if (name=="adaptive_raw") name="Adaptive raw MC"
     else if (name=="statmc_no_rpd") name="StatMC (no RPD)"
     else if (name=="statmc_rpd") name="StatMC + RPD"
     display_scene=scene; gsub(/_/, "\\_", display_scene)

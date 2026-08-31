@@ -49,9 +49,9 @@ static int compare_hdr(const char* a_path, const char* b_path) {
     double psnr = (rmse > 0) ? 20 * std::log10(peak / rmse) : INFINITY;
 
     std::printf("HDR compare:\n");
-    std::printf("  Mean abs diff per channel: R=%.6g G=%.6g B=%.6g\n", mean_abs[0], mean_abs[1], mean_abs[2]);
-    std::printf("  Max  abs diff per channel: R=%.6g G=%.6g B=%.6g\n", max_abs[0], max_abs[1], max_abs[2]);
-    std::printf("  RMSE: %.6g  PSNR (reference peak=%.6g): %.2f dB\n", rmse, peak, psnr);
+    std::printf("  Mean abs diff per channel: R=%.12g G=%.12g B=%.12g\n", mean_abs[0], mean_abs[1], mean_abs[2]);
+    std::printf("  Max  abs diff per channel: R=%.12g G=%.12g B=%.12g\n", max_abs[0], max_abs[1], max_abs[2]);
+    std::printf("  RMSE: %.12g  PSNR (reference peak=%.12g): %.6g dB\n", rmse, peak, psnr);
     return 0;
 }
 
@@ -95,9 +95,9 @@ static int compare_png(const char* a_path, const char* b_path) {
     double psnr = (rmse > 0) ? 20 * std::log10(1.0 / rmse) : INFINITY;
 
     std::printf("PNG compare:\n");
-    std::printf("  Mean abs diff per channel: R=%.6f G=%.6f B=%.6f\n", mean_abs[0], mean_abs[1], mean_abs[2]);
-    std::printf("  Max  abs diff per channel: R=%.6f G=%.6f B=%.6f\n", max_abs[0], max_abs[1], max_abs[2]);
-    std::printf("  RMSE: %.6f  PSNR: %.2f dB\n", rmse, psnr);
+    std::printf("  Mean abs diff per channel: R=%.12g G=%.12g B=%.12g\n", mean_abs[0], mean_abs[1], mean_abs[2]);
+    std::printf("  Max  abs diff per channel: R=%.12g G=%.12g B=%.12g\n", max_abs[0], max_abs[1], max_abs[2]);
+    std::printf("  RMSE: %.12g  PSNR: %.6g dB\n", rmse, psnr);
     return 0;
 }
 
@@ -279,10 +279,10 @@ static int hdr_metrics(const char* ref_path, const char* test_path, const char* 
     const ExtendedMetrics extended = compute_extended_metrics(ref, tst, wr, hr);
 
     std::printf("HDR metrics:\n");
-    std::printf("  MAE: %.6g  RMSE: %.6g  PSNR (reference peak=%.6g): %.2f dB\n",
+    std::printf("  MAE: %.12g  RMSE: %.12g  PSNR (reference peak=%.12g): %.6g dB\n",
                 sum_abs / (pixels * 3), rmse, peak, psnr);
     std::printf("  SSIM (global diagnostic, per channel): R=%.4f G=%.4f B=%.4f  mean=%.4f\n", ssim[0], ssim[1], ssim[2], (ssim[0] + ssim[1] + ssim[2]) / 3.0);
-    std::printf("  Extended: NRMSE: %.6g  LogSSIM11: %.6g  LogGradNRMSE: %.6g\n",
+    std::printf("  Extended: NRMSE: %.12g  LogSSIM11: %.12g  LogGradNRMSE: %.12g\n",
                 extended.nrmse, extended.log_ssim11, extended.log_gradient_nrmse);
 
     if (residual_out) {

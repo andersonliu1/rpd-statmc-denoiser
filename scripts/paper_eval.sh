@@ -17,7 +17,7 @@ usage() {
     cat <<EOF
 Usage: $0 --config path_tracer/config/scene.yaml [options]
 
-Runs uniform, StatMC/RPD-off, and StatMC/RPD-on with paired seeds. It writes
+Runs uniform, adaptive raw MC, StatMC/RPD-off, and StatMC/RPD-on with paired seeds. It writes
 extended metrics, paired confidence intervals, a reference-noise check, and
 ready-named paper images.
 
@@ -84,6 +84,22 @@ cd "$REPO_ROOT"
 
 IFS=',' read -r -a seed_list <<< "$SEEDS"
 [[ ${#seed_list[@]} -gt 0 ]] || { echo "At least one seed is required" >&2; exit 1; }
+declare -A seen_seeds=()
+for seed in "${seed_list[@]}"; do
+    [[ "$seed" =~ ^[0-9]+$ ]] || { echo "Invalid seed: $seed" >&2; exit 1; }
+    [[ -z "${seen_seeds[$seed]+x}" ]] || { echo "Duplicate seed: $seed" >&2; exit 1; }
+    seen_seeds[$seed]=1
+done
+if [[ "$REFERENCE_CHECK" == true && "$REFERENCE_SEED" == "$REFERENCE_SEED2" ]]; then
+    echo "Reference seeds must differ" >&2
+    exit 1
+fi
+for seed in "${seed_list[@]}"; do
+    if [[ "$seed" == "$REFERENCE_SEED" || ( "$REFERENCE_CHECK" == true && "$seed" == "$REFERENCE_SEED2" ) ]]; then
+        echo "Reference seed $seed also appears in --seeds" >&2
+        exit 1
+    fi
+done
 [[ -n "$REPRESENTATIVE_SEED" ]] || REPRESENTATIVE_SEED="${seed_list[0]}"
 [[ ",$SEEDS," == *",$REPRESENTATIVE_SEED,"* ]] || {
     echo "Representative seed $REPRESENTATIVE_SEED is not in --seeds" >&2
@@ -146,7 +162,10 @@ if [[ "$REFERENCE_CHECK" == true ]]; then
 fi
 
 assets="$OUTPUT_ROOT/paper_assets"
+residuals="$OUTPUT_ROOT/residuals"
 mkdir -p "$assets"
+mkdir -p "$residuals"
+rm -f -- "$assets/${scene}_rpd_light_visibility.png"
 cp "$OUTPUT_ROOT/reference/reference.png" "$assets/${scene}_reference.png"
 if [[ "$REFERENCE_CHECK" == true ]]; then
     cp "$OUTPUT_ROOT/reference_check/reference_check.png" "$assets/${scene}_reference_check.png"
@@ -155,22 +174,39 @@ fi
 csv="$OUTPUT_ROOT/results.csv"
 printf 'scene,seed,method,hdr_mae,hdr_rmse,hdr_psnr,hdr_nrmse,log_ssim11,log_gradient_nrmse,png_rmse,png_psnr,wall_seconds\n' > "$csv"
 
-for seed in "${seed_list[@]}"; do
+for seed_index in "${!seed_list[@]}"; do
+    seed="${seed_list[$seed_index]}"
     render "uniform_seed${seed}" --seed "$seed" --spp "$UNIFORM_SPP" --no-statmc
-    render "statmc_no_rpd_seed${seed}" --seed "$seed" --statmc --rpf-shrinkage-scale 0
-    render "statmc_rpd_seed${seed}" --seed "$seed" --statmc --rpf-shrinkage-scale 1
+    if (( seed_index % 2 == 0 )); then
+        render "statmc_no_rpd_seed${seed}" --seed "$seed" --statmc --rpf-shrinkage-scale 0
+        render "statmc_rpd_seed${seed}" --seed "$seed" --statmc --rpf-shrinkage-scale 1
+    else
+        render "statmc_rpd_seed${seed}" --seed "$seed" --statmc --rpf-shrinkage-scale 1
+        render "statmc_no_rpd_seed${seed}" --seed "$seed" --statmc --rpf-shrinkage-scale 0
+    fi
+    cmp "$OUTPUT_ROOT/statmc_no_rpd_seed${seed}/statmc_no_rpd_seed${seed}_raw.hdr" \
+        "$OUTPUT_ROOT/statmc_rpd_seed${seed}/statmc_rpd_seed${seed}_raw.hdr"
 
-    for method in uniform statmc_no_rpd statmc_rpd; do
-        label="${method}_seed${seed}"
+    for method in uniform adaptive_raw statmc_no_rpd statmc_rpd; do
+        if [[ "$method" == adaptive_raw ]]; then
+            label="statmc_no_rpd_seed${seed}"
+            candidate="$OUTPUT_ROOT/$label/${label}_raw"
+        else
+            label="${method}_seed${seed}"
+            candidate="$OUTPUT_ROOT/$label/$label"
+        fi
         residual_args=()
         if [[ "$seed" == "$REPRESENTATIVE_SEED" ]]; then
-            residual_args=("$assets/${scene}_${method}_residual.hdr")
-            cp "$OUTPUT_ROOT/$label/$label.png" "$assets/${scene}_${method}.png"
+            residual_args=("$residuals/${scene}_${method}_residual.hdr")
+            cp "$candidate.png" "$assets/${scene}_${method}.png"
+            if [[ "$method" == statmc_no_rpd || "$method" == statmc_rpd ]]; then
+                cp "$OUTPUT_ROOT/$label/${label}_raw.png" "$assets/${scene}_${method}_raw.png"
+            fi
         fi
         hdr_metrics="$("$EVAL" hdr-metrics \
-            "$OUTPUT_ROOT/reference/reference.hdr" "$OUTPUT_ROOT/$label/$label.hdr" "${residual_args[@]}")"
+            "$OUTPUT_ROOT/reference/reference.hdr" "$candidate.hdr" "${residual_args[@]}")"
         png_metrics="$("$EVAL" compare-png \
-            "$OUTPUT_ROOT/reference/reference.png" "$OUTPUT_ROOT/$label/$label.png")"
+            "$OUTPUT_ROOT/reference/reference.png" "$candidate.png")"
         hdr_line="$(awk '/^  MAE:/ { print; exit }' <<< "$hdr_metrics")"
         extended_line="$(awk '/^  Extended:/ { print; exit }' <<< "$hdr_metrics")"
         png_line="$(awk '/^  RMSE:/ { print; exit }' <<< "$png_metrics")"
@@ -188,15 +224,15 @@ for seed in "${seed_list[@]}"; do
             "${render_seconds[$label]}" >> "$csv"
 
         if [[ "$seed" == "$REPRESENTATIVE_SEED" ]]; then
-            "$TONEMAP" "$assets/${scene}_${method}_residual.hdr" \
+            "$TONEMAP" "$residuals/${scene}_${method}_residual.hdr" \
                 "$assets/${scene}_${method}_residual.png" agx >/dev/null
         fi
     done
 done
 
 rpd_label="statmc_rpd_seed${REPRESENTATIVE_SEED}"
-for diagnostic in sensitivity sensitivity_pixel sensitivity_brdf sensitivity_lens sensitivity_light sensitivity_environment sensitivity_rr \
-                  sensitivity_confidence sensitivity_gradient light_visibility alpha sample_fraction; do
+for diagnostic in sensitivity sensitivity_pixel sensitivity_brdf sensitivity_lens sensitivity_light sensitivity_light_uv sensitivity_light_select sensitivity_environment sensitivity_rr \
+                  sensitivity_confidence sensitivity_gradient alpha sample_fraction; do
     diagnostic_hdr="$OUTPUT_ROOT/$rpd_label/${rpd_label}_${diagnostic}.hdr"
     if [[ -f "$diagnostic_hdr" ]]; then
         "$TONEMAP" "$diagnostic_hdr" "$assets/${scene}_rpd_${diagnostic}.png" linear >/dev/null
@@ -233,8 +269,8 @@ function ci(sum, sum2, count, avg, variance) {
     return tcrit(count)*sqrt((variance > 0 ? variance : 0)/count)
 }
 END {
-    order[1]="uniform"; order[2]="statmc_no_rpd"; order[3]="statmc_rpd"
-    for (i=1; i<=3; ++i) {
+    order[1]="uniform"; order[2]="adaptive_raw"; order[3]="statmc_no_rpd"; order[4]="statmc_rpd"
+    for (i=1; i<=4; ++i) {
         m=order[i]
         am=mean(a[m],n[m]); bm=mean(b[m],n[m]); cm=mean(c[m],n[m])
         dm=mean(d[m],n[m]); em=mean(e[m],n[m]); fm=mean(f[m],n[m])
@@ -253,13 +289,16 @@ NR > 1 {
     hdr[key]=$5; nrmse[key]=$7; ssim[key]=$8; grad[key]=$9; png[key]=$10; wall[key]=$12
 }
 END {
-    base[1]="uniform"; candidate[1]="statmc_no_rpd"; label[1]="statmc_no_rpd-vs-uniform"
-    base[2]="uniform"; candidate[2]="statmc_rpd"; label[2]="statmc_rpd-vs-uniform"
-    base[3]="statmc_no_rpd"; candidate[3]="statmc_rpd"; label[3]="rpd-vs-no_rpd"
-    for (seed_value in seen) for (i=1; i<=3; ++i) {
+    base[1]="uniform"; candidate[1]="adaptive_raw"; label[1]="adaptive_raw-vs-uniform"
+    base[2]="adaptive_raw"; candidate[2]="statmc_no_rpd"; label[2]="statmc_no_rpd-vs-adaptive_raw"
+    base[3]="uniform"; candidate[3]="statmc_no_rpd"; label[3]="statmc_no_rpd-vs-uniform"
+    base[4]="uniform"; candidate[4]="statmc_rpd"; label[4]="statmc_rpd-vs-uniform"
+    base[5]="statmc_no_rpd"; candidate[5]="statmc_rpd"; label[5]="rpd-vs-no_rpd"
+    for (seed_value in seen) for (i=1; i<=5; ++i) {
         b=seed_value SUBSEP base[i]; c=seed_value SUBSEP candidate[i]
-        printf "%s,%s,%s,%.8g,%.8g,%.8g,%.8g,%.8g,%.8g\n", scene[seed_value],seed_value,label[i], \
-            hdr[b]-hdr[c],nrmse[b]-nrmse[c],ssim[c]-ssim[b],grad[b]-grad[c],png[b]-png[c],wall[c]/wall[b]
+        ratio=(base[i]=="adaptive_raw" || candidate[i]=="adaptive_raw") ? "NA" : sprintf("%.8g",wall[c]/wall[b])
+        printf "%s,%s,%s,%.8g,%.8g,%.8g,%.8g,%.8g,%s\n", scene[seed_value],seed_value,label[i], \
+            hdr[b]-hdr[c],nrmse[b]-nrmse[c],ssim[c]-ssim[b],grad[b]-grad[c],png[b]-png[c],ratio
     }
 }' "$csv" > "$paired"
 
@@ -269,7 +308,8 @@ BEGIN { print "scene,comparison,n,hdr_rmse_reduction_mean,hdr_rmse_reduction_ci9
 NR > 1 {
     scene_name=$1; m=$3; n[m]++
     a[m]+=$4; a2[m]+=$4*$4; b[m]+=$5; b2[m]+=$5*$5; c[m]+=$6; c2[m]+=$6*$6
-    d[m]+=$7; d2[m]+=$7*$7; e[m]+=$8; e2[m]+=$8*$8; f[m]+=$9; f2[m]+=$9*$9
+    d[m]+=$7; d2[m]+=$7*$7; e[m]+=$8; e2[m]+=$8*$8
+    if ($9 != "NA") { f[m]+=$9; f2[m]+=$9*$9; fn[m]++ }
 }
 function mean(sum, count) { return sum/count }
 function tcrit(count, df,z,z2,z3,z5,z7) {
@@ -283,15 +323,18 @@ function ci(sum, sum2, count, avg, variance) {
     return tcrit(count)*sqrt((variance > 0 ? variance : 0)/count)
 }
 END {
-    order[1]="statmc_no_rpd-vs-uniform"; order[2]="statmc_rpd-vs-uniform"; order[3]="rpd-vs-no_rpd"
-    for (i=1; i<=3; ++i) {
+    order[1]="adaptive_raw-vs-uniform"; order[2]="statmc_no_rpd-vs-adaptive_raw"
+    order[3]="statmc_no_rpd-vs-uniform"; order[4]="statmc_rpd-vs-uniform"; order[5]="rpd-vs-no_rpd"
+    for (i=1; i<=5; ++i) {
         m=order[i]
         am=mean(a[m],n[m]); bm=mean(b[m],n[m]); cm=mean(c[m],n[m])
-        dm=mean(d[m],n[m]); em=mean(e[m],n[m]); fm=mean(f[m],n[m])
-        printf "%s,%s,%d,%.8g,%.8g,%.8g,%.8g,%.8g,%.8g,%.8g,%.8g,%.8g,%.8g,%.8g,%.8g\n", \
+        dm=mean(d[m],n[m]); em=mean(e[m],n[m])
+        runtime_mean=fn[m] ? sprintf("%.8g",mean(f[m],fn[m])) : "NA"
+        runtime_ci=fn[m] ? sprintf("%.8g",ci(f[m],f2[m],fn[m],mean(f[m],fn[m]))) : "NA"
+        printf "%s,%s,%d,%.8g,%.8g,%.8g,%.8g,%.8g,%.8g,%.8g,%.8g,%.8g,%.8g,%s,%s\n", \
             scene_name,m,n[m],am,ci(a[m],a2[m],n[m],am),bm,ci(b[m],b2[m],n[m],bm), \
             cm,ci(c[m],c2[m],n[m],cm),dm,ci(d[m],d2[m],n[m],dm), \
-            em,ci(e[m],e2[m],n[m],em),fm,ci(f[m],f2[m],n[m],fm)
+            em,ci(e[m],e2[m],n[m],em),runtime_mean,runtime_ci
     }
 }' "$paired" > "$paired_summary"
 
@@ -316,6 +359,7 @@ awk -F, -v scene="$scene" '
 NR > 1 {
     name=$2
     if (name=="uniform") name="Uniform"
+    else if (name=="adaptive_raw") name="Adaptive raw MC"
     else if (name=="statmc_no_rpd") name="StatMC (no RPD)"
     else if (name=="statmc_rpd") name="StatMC + RPD"
     display_scene=scene; gsub(/_/, "\\_", display_scene)
@@ -324,11 +368,15 @@ NR > 1 {
 }' "$summary" > "$OUTPUT_ROOT/table_rows.tex"
 
 {
+    echo "Revision: $(git rev-parse HEAD)"
+    echo "Working-tree diff: $working_tree_diff_sha256"
     echo "Representative seed: $REPRESENTATIVE_SEED"
     echo "Reference: ${scene}_reference.png"
-    echo "Methods: ${scene}_uniform.png, ${scene}_statmc_no_rpd.png, ${scene}_statmc_rpd.png"
-    echo "Residuals: ${scene}_{uniform,statmc_no_rpd,statmc_rpd}_residual.png"
-    echo "Diagnostics: ${scene}_rpd_{sensitivity,sensitivity_light,light_visibility,...}.png"
+    echo "Methods: ${scene}_uniform.png, ${scene}_adaptive_raw.png, ${scene}_statmc_no_rpd.png, ${scene}_statmc_rpd.png"
+    echo "Raw StatMC: ${scene}_statmc_{no_rpd,rpd}_raw.png (must match exactly)"
+    echo "Residuals: ${scene}_{uniform,adaptive_raw,statmc_no_rpd,statmc_rpd}_residual.png"
+    echo "Diagnostics: ${scene}_rpd_{sensitivity,sensitivity_light,sensitivity_light_uv,sensitivity_light_select,...}.png"
+    echo "Adaptive-raw timing reuses its StatMC no-RPD source render; it is not standalone filter overhead."
 } > "$assets/${scene}_README.txt"
 
 echo "Wrote $csv"

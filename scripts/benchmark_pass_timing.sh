@@ -47,6 +47,9 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
 if [[ -z "${CONFIG}" ]]; then
     echo "Missing --config" >&2
     usage
@@ -114,15 +117,17 @@ adaptive_spp = sys.argv[6]
 cmd = sys.argv[7:]
 
 start = time.perf_counter()
-proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=True)
+proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 wall_ms = (time.perf_counter() - start) * 1000.0
 log_path.write_text(proc.stdout)
+if proc.returncode:
+    raise SystemExit(proc.returncode)
 
 patterns = {
     "render_ms": r"Rendering completed in (\d+) ms",
     "adaptive_render_ms": r"Adaptive rendering completed in (\d+) ms",
     "denoise_ms": r"StatMC denoise completed in (\d+) ms",
-    "var_denoise_ms": r"Variance-of-mean denoise completed in (\d+) ms",
+    "var_denoise_ms": r"Sample-variance denoise completed in (\d+) ms",
     "sensitivity_ms": r"Sensitivity recompute completed in (\d+) ms",
     "adaptive_count_ms": r"Adaptive sample count computation completed in (\d+) ms",
 }
