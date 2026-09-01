@@ -1,5 +1,4 @@
 # Random Parameter Decomposition for Statistics-Based Monte Carlo Denoising
-![Imgur](https://i.imgur.com/dMKWZ8M.png)
 ## Setup
 
 ```bash
