@@ -5,11 +5,12 @@
 #define EPS 1e-4f
 #define EPS_ANYHIT 5e-4f
 
-#define M_1_2PI 0.159154943091895335769 // 1/2 pi
+#define M_1_2PI 0.159154943091895335769
 
-/// @brief Orthonormal Basis: https://graphics.pixar.com/library/OrthonormalB/paper.pdf
-/// @param v 
-/// @return 
+/// @brief Constructs an orthonormal basis using Pixar's revised method.
+/// @param v Basis normal.
+/// @return Two tangent vectors perpendicular to v.
+/// @see https://graphics.pixar.com/library/OrthonormalB/paper.pdf
 inline std::tuple<Vec3f, Vec3f> coordinate_system(const Vec3f& v){
     float sign = copysignf(1.0f, v.z());
     const float a = -1.0f / (sign + v.z());
@@ -35,7 +36,6 @@ inline Vec3f offset_ray_origin(const Vec3f& ray_pos, const Vec3f& normal) {
     return ray_pos + EPS * normal;
 }
 
-// https://en.wikipedia.org/wiki/Relative_luminance
 inline float calc_luminance(const Vec3f& c) {
     return 0.2126f * c.x() + 0.7152f * c.y() + 0.0722f * c.z();
 }

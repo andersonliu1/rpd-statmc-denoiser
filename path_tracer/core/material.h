@@ -17,10 +17,10 @@ struct Lambertian {
         return eval();
     }
 
-    /// @brief Sample BRDF for the Lambertian
-    /// @param normal The surface normal
-    /// @param u A random number (0,1)^2
-    /// @return A tuple containing the sampled direction in world space and the PDF
+    /// @brief Samples a cosine-weighted Lambertian direction.
+    /// @param normal Surface normal in world space.
+    /// @param u Uniform sample in the unit square.
+    /// @return Sampled direction and its solid-angle PDF.
     std::tuple<Vec3f, float> sample(Vec3f normal, Vec2f u) const {
         float r = std::sqrt(u.x());
         float theta = 2.0f * M_PI * u.y();
@@ -38,11 +38,10 @@ struct Lambertian {
         return sample(normal, u);
     }
 
-    /// @brief Computes the PDF for the Lambertian
-    /// @param wo_world The outgoing direction
-    /// @param wi_world The light incident direction
-    /// @param normal The surface normal (unused for Lambertian)
-    /// @return The PDF value
+    /// @brief Evaluates the Lambertian solid-angle PDF.
+    /// @param wi_world Incident direction in world space.
+    /// @param normal Surface normal in world space.
+    /// @return Cosine-weighted PDF.
     float pdf(Vec3f, Vec3f wi_world, Vec3f normal) const {
         float cos_theta = std::max(0.0f, wi_world.dot(normal));
         return cos_theta / M_PI;
@@ -59,9 +58,9 @@ struct Microfacet {
     Vec3f n1, n2;
     Distribution distribution = Distribution::GGX;
 
-    /// @brief Compute the Fresnel term for the microfacet
-    /// @param cos_theta Incident direction dot half vector
-    /// @return Fresnel reflectance
+    /// @brief Evaluates Schlick Fresnel reflectance.
+    /// @param cos_theta Cosine between the incident and half vectors.
+    /// @return RGB Fresnel reflectance.
     Vec3f F(float cos_theta) const {
         cos_theta = std::clamp(cos_theta, 0.0f, 1.0f);
         Vec3f r0 = (n1 - n2).cwiseProduct(n1 - n2).cwiseQuotient((n1 + n2).cwiseProduct(n1 + n2));
@@ -69,9 +68,9 @@ struct Microfacet {
         return r0 + (Vec3f::Ones() - r0) * factor;
     }
 
-    /// @brief Beckmann normal distribution
-    /// @param h Local half-vector
-    /// @return NDF value
+    /// @brief Evaluates the selected microfacet normal distribution.
+    /// @param h Half vector in local shading coordinates.
+    /// @return Normal-distribution density.
     float D(const Vec3f& h) const {
         Vec3f m = h.normalized();
         float cos_theta = std::clamp(m.z(), EPS, 1.0f);
@@ -88,10 +87,10 @@ struct Microfacet {
         return (alpha * alpha) / (M_PI * denom * denom);
     }
 
-    /// @brief Smith shadowing/masking term
-    /// @param wo Local outgoing direction
-    /// @param wi Local incoming direction
-    /// @return Shadowing-masking factor
+    /// @brief Evaluates Smith masking and shadowing.
+    /// @param wo Local outgoing direction.
+    /// @param wi Local incident direction.
+    /// @return Joint masking-shadowing factor.
     float G(const Vec3f& wo, const Vec3f& wi) const {
         auto smith = [&](const Vec3f& v) {
             float cos_theta = std::clamp(v.z(), EPS, 1.0f);
@@ -238,6 +237,13 @@ inline Vec3f material_albedo(const Material& material) {
     return std::visit([&](const auto& brdf) { return brdf.albedo; }, material.brdf);
 }
 
+/// @brief Reports whether the material uses a delta-distribution BRDF.
+/// @param material Material to inspect.
+/// @return True for ideal specular reflection.
+inline bool brdf_is_delta(const Material& material) {
+    return std::holds_alternative<Mirror>(material.brdf);
+}
+
 inline Vec3f brdf_eval(const Material& material, Vec3f wo_world, Vec3f wi_world, Vec3f normal) {
     return std::visit([&](const auto& brdf) { return brdf.eval(wo_world, wi_world, normal); }, material.brdf);
 }
@@ -248,4 +254,23 @@ inline float brdf_pdf(const Material& material, Vec3f wo_world, Vec3f wi_world, 
 
 inline std::tuple<Vec3f, float> brdf_sample(const Material& material, Vec3f wo_world, Vec3f normal, Vec2f u) {
     return std::visit([&](const auto& brdf) { return brdf.sample(wo_world, normal, u); }, material.brdf);
+}
+
+/// @brief Computes throughput for a direction sampled from the material BRDF.
+/// @param material Sampled material.
+/// @param wo_world Outgoing world-space direction.
+/// @param wi_world Sampled incoming world-space direction.
+/// @param normal Surface normal.
+/// @param pdf Sampling density returned by brdf_sample.
+/// @return Monte Carlo throughput multiplier.
+inline Vec3f brdf_sample_weight(
+    const Material& material,
+    Vec3f wo_world,
+    Vec3f wi_world,
+    Vec3f normal,
+    float pdf) {
+    if (pdf <= EPS_SMALL) return Vec3f::Zero();
+    if (brdf_is_delta(material)) return material_albedo(material);
+    return brdf_eval(material, wo_world, wi_world, normal) *
+        (std::max(0.0f, normal.dot(wi_world)) / pdf);
 }

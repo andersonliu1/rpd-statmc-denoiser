@@ -20,14 +20,14 @@ struct Camera {
     Vec3f horizontal = Vec3f::Zero();
     Vec3f vertical = Vec3f::Zero();
 
-    /// Initializes the camera basis and thin-lens parameters.
-    /// @param eye_position Camera origin in world space.
-    /// @param forward Direction in world space the camera looks toward.
-    /// @param world_up Hint for the upward direction (should not be parallel to the view direction).
+    /// @brief Initializes the camera basis and thin-lens geometry.
+    /// @param eye_pos Camera origin in world space.
+    /// @param forward Viewing direction in world space.
     /// @param fov Vertical field of view in degrees.
-    /// @param camera_aspect Image aspect ratio (width / height).
+    /// @param camera_aspect Image width divided by height.
     /// @param focus_dist Distance from the eye to the focal plane.
-    /// @param aperture Diameter of the lens opening (0 for pinhole).
+    /// @param aperture Lens diameter; zero selects a pinhole camera.
+    /// @param world_up Preferred upward direction.
     void init(const Vec3f& eye_pos, const Vec3f& forward, const float fov, const float camera_aspect, const float focus_dist = 1.0f, const float aperture = 0.0f, const Vec3f& world_up = Vec3f(0.0f, 1.0f, 0.0f)) {
         position = eye_pos;
         vertical_fov = fov;

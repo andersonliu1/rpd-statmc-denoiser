@@ -16,7 +16,6 @@
 namespace scenes {
 
     inline Scene make_scene(const std::string& name) {
-        // Classic scenes
         if (name == "cornell_box") {
             return make_cornell_box();
         }
@@ -24,7 +23,6 @@ namespace scenes {
             return make_debug_scene();
         }
 
-        // Sphere scenes
         if (name == "cornell_spheres") {
             return make_cornell_spheres();
         }
@@ -38,7 +36,6 @@ namespace scenes {
             return make_caustics();
         }
 
-        // Mesh scenes (OBJ models)
         if (name == "bunny") {
             return make_bunny();
         }
@@ -55,4 +52,4 @@ namespace scenes {
             "  Debug: debug");
     }
 
-} // namespace scenes
+}

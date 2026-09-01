@@ -16,12 +16,12 @@ inline Scene make_dragon() {
     scene.environment_color = Vec3f::Zero();
 
     const std::array<Material, 6> material_defs = {
-        Material{Lambertian{Vec3f(0.874000013f, 0.874000013f, 0.875000000f)}}, // Back
-        Material{Lambertian{Vec3f(0.874000013f, 0.874000013f, 0.875000000f)}}, // Bottom
-        Material{Lambertian{Vec3f(0.05f, 0.15f, 0.25f)}},                      // Left
-        Material{Lambertian{Vec3f(0.6f, 0.4f, 0.08f)}},                        // Right
-        Material{Lambertian{Vec3f(0.874000013f, 0.874000013f, 0.875000000f)}}, // Top
-        Material{Lambertian{Vec3f(1.0f, 1.0f, 1.0f)}}                           // Light
+        Material{Lambertian{Vec3f(0.874000013f, 0.874000013f, 0.875000000f)}},
+        Material{Lambertian{Vec3f(0.874000013f, 0.874000013f, 0.875000000f)}},
+        Material{Lambertian{Vec3f(0.05f, 0.15f, 0.25f)}},
+        Material{Lambertian{Vec3f(0.6f, 0.4f, 0.08f)}},
+        Material{Lambertian{Vec3f(0.874000013f, 0.874000013f, 0.875000000f)}},
+        Material{Lambertian{Vec3f(1.0f, 1.0f, 1.0f)}}
     };
 
     std::array<int, material_defs.size()> material_ids{};
@@ -71,7 +71,6 @@ inline Scene make_dragon() {
     accent_light.intensity = Vec3f(0.2f, 0.2f, 0.24f);
     scene.add_light(accent_light);
 
-    // Back wall
     scene.add_triangle(make_triangle(to_scene(Vec3f(0.000000133f, -0.559199989f, 0.548799932f)),
                                      to_scene(Vec3f(0.555999935f, -0.559199989f, 0.000000040f)),
                                      to_scene(Vec3f(0.000000133f, -0.559199989f, 0.000000040f)), back_id));
@@ -79,7 +78,6 @@ inline Scene make_dragon() {
                                      to_scene(Vec3f(0.555999935f, -0.559199989f, 0.548799932f)),
                                      to_scene(Vec3f(0.555999935f, -0.559199989f, 0.000000040f)), back_id));
 
-    // Bottom
     scene.add_triangle(make_triangle(to_scene(Vec3f(0.000000133f, -0.559199989f, 0.000000040f)),
                                      to_scene(Vec3f(0.555999935f, -0.559199989f, 0.000000040f)),
                                      to_scene(Vec3f(0.555999935f, -0.000000119f, 0.000000040f)), bottom_id));
@@ -87,7 +85,6 @@ inline Scene make_dragon() {
                                      to_scene(Vec3f(0.555999935f, -0.000000119f, 0.000000040f)),
                                      to_scene(Vec3f(0.000000133f, -0.000000119f, 0.000000040f)), bottom_id));
 
-    // Left wall
     scene.add_triangle(make_triangle(to_scene(Vec3f(0.555999935f, -0.000000119f, 0.548799932f)),
                                      to_scene(Vec3f(0.555999935f, -0.000000119f, 0.000000040f)),
                                      to_scene(Vec3f(0.555999935f, -0.559199989f, 0.000000040f)), left_id));
@@ -95,7 +92,6 @@ inline Scene make_dragon() {
                                      to_scene(Vec3f(0.555999935f, -0.559199989f, 0.000000040f)),
                                      to_scene(Vec3f(0.555999935f, -0.559199989f, 0.548799932f)), left_id));
 
-    // Right wall
     scene.add_triangle(make_triangle(to_scene(Vec3f(0.000000133f, -0.559199989f, 0.000000040f)),
                                      to_scene(Vec3f(0.000000133f, -0.000000119f, 0.000000040f)),
                                      to_scene(Vec3f(0.000000133f, -0.000000119f, 0.548799932f)), right_id));
@@ -103,7 +99,6 @@ inline Scene make_dragon() {
                                      to_scene(Vec3f(0.000000133f, -0.000000119f, 0.548799932f)),
                                      to_scene(Vec3f(0.000000133f, -0.559199989f, 0.548799932f)), right_id));
 
-    // Top
     scene.add_triangle(make_triangle(to_scene(Vec3f(0.000000133f, -0.000000119f, 0.548799932f)),
                                      to_scene(Vec3f(0.555999935f, -0.559199989f, 0.548799932f)),
                                      to_scene(Vec3f(0.000000133f, -0.559199989f, 0.548799932f)), top_id));
@@ -137,7 +132,7 @@ inline Scene make_dragon() {
         return Vec3f(c * v.x() + s * v.z(), v.y(), -s * v.x() + c * v.z());
     };
 
-    const float face_angle = static_cast<float>(1.5 * M_PI); // rotate 90 degrees left
+    const float face_angle = static_cast<float>(1.5 * M_PI);
 
     for (Triangle& tri : dragon_mesh) {
         for (int i = 0; i < 3; ++i) {
@@ -157,4 +152,4 @@ inline Scene make_dragon() {
     return scene;
 }
 
-} // namespace scenes
+}

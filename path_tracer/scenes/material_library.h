@@ -56,4 +56,4 @@ inline const Microfacet Gold {
             .distribution = Microfacet::Distribution::GGX
     };
 
-} // namespace scenes
+}

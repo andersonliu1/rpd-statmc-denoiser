@@ -1,7 +1,11 @@
 #pragma once
 
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <stdexcept>
 #include <vector>
 
@@ -20,15 +24,12 @@ struct RenderConfig {
     Vec3f camera_up;
     std::optional<std::string> scene_name;
     std::optional<std::string> output_dir;
-    bool use_statmc = false; // StatMC denoiser flag
+    bool use_statmc = false;
     int rpf_tile_size = 8;
-    int rpf_target_samples = -1; // -1 = auto
-    int rpf_max_radius = 1;      // pooling radius in tiles (0 = no pooling)
-    int color_window_radius = 1;
+    int color_window_radius = 7;
     float color_normal_threshold = 0.5f;
     float color_depth_threshold = 0.25f;
-    float color_compat_alpha = 0.05f; // significance for t-test-like gate
-    float color_shrinkage_k = 0.1f;
+    float color_compat_alpha = 0.05f;
     float color_sigma_max = 6.0f;
     int var_window_radius = 1;
     float var_normal_threshold = 0.5f;
@@ -40,14 +41,33 @@ struct RenderConfig {
     int adaptive_spp = 0;
     float adaptive_sigma_max = 3.0f;
     int adaptive_passes = 1;
-    std::string tonemap = "agx"; // tonemapping preset
-    // RP sensitivity controls (minimal interface)
-    float rpf_shrinkage_scale = 1.0f;       // k_eff = k * (1 + scale * f_rp)
-    float sensitivity_match_threshold = 0.0f; // |Δs_k| reject if max delta > threshold; 0 disables
-    bool debug_statmc_outputs = false;      // dump StatMC debug HDRs
+    int adaptive_importance_smoothing_radius = 1;
+    std::string tonemap = "agx";
+    float rpf_shrinkage_scale = 1.0f;
+    float rpf_confidence_samples = 128.0f;
+    bool debug_statmc_outputs = false;
 };
 
 inline RenderConfig parse_render_config(const YAML::Node& config) {
+    if (!config.IsMap()) throw std::runtime_error("Render config must be a map");
+
+    static constexpr auto known_keys = std::to_array<std::string_view>({
+        "image_width", "image_height", "samples_per_pixel", "fov", "focus_distance", "aperture",
+        "camera_position", "camera_direction", "world_up", "scene", "output", "statmc_enabled",
+        "rpf_tile_size", "color_window_radius", "color_normal_threshold", "color_depth_threshold",
+        "color_compat_alpha", "color_sigma_max", "var_window_radius", "var_normal_threshold",
+        "var_depth_threshold", "var_compat_sigma", "var_shrinkage_k", "var_iterations",
+        "adaptive_base_samples", "adaptive_spp", "adaptive_sigma_max", "adaptive_passes",
+        "adaptive_importance_smoothing_radius", "tonemap", "rpf_shrinkage_scale",
+        "rpf_confidence_samples", "debug_statmc_outputs"
+    });
+    for (const auto& entry : config) {
+        const std::string key = entry.first.as<std::string>();
+        if (std::find(known_keys.begin(), known_keys.end(), key) == known_keys.end()) {
+            throw std::runtime_error("Unknown render config key: " + key);
+        }
+    }
+
     RenderConfig render_config{};
     render_config.image_width = config["image_width"].as<int>();
     render_config.image_height = config["image_height"].as<int>();
@@ -74,13 +94,10 @@ inline RenderConfig parse_render_config(const YAML::Node& config) {
 
     if (config["statmc_enabled"]) render_config.use_statmc = config["statmc_enabled"].as<bool>();
     if (config["rpf_tile_size"]) render_config.rpf_tile_size = config["rpf_tile_size"].as<int>();
-    if (config["rpf_target_samples"]) render_config.rpf_target_samples = config["rpf_target_samples"].as<int>();
-    if (config["rpf_max_radius"]) render_config.rpf_max_radius = config["rpf_max_radius"].as<int>();
     if (config["color_window_radius"]) render_config.color_window_radius = config["color_window_radius"].as<int>();
     if (config["color_normal_threshold"]) render_config.color_normal_threshold = config["color_normal_threshold"].as<float>();
     if (config["color_depth_threshold"]) render_config.color_depth_threshold = config["color_depth_threshold"].as<float>();
     if (config["color_compat_alpha"]) render_config.color_compat_alpha = config["color_compat_alpha"].as<float>();
-    if (config["color_shrinkage_k"]) render_config.color_shrinkage_k = config["color_shrinkage_k"].as<float>();
     if (config["color_sigma_max"]) render_config.color_sigma_max = config["color_sigma_max"].as<float>();
     if (config["var_window_radius"]) render_config.var_window_radius = config["var_window_radius"].as<int>();
     if (config["var_normal_threshold"]) render_config.var_normal_threshold = config["var_normal_threshold"].as<float>();
@@ -92,47 +109,62 @@ inline RenderConfig parse_render_config(const YAML::Node& config) {
     if (config["adaptive_spp"]) render_config.adaptive_spp = config["adaptive_spp"].as<int>();
     if (config["adaptive_sigma_max"]) render_config.adaptive_sigma_max = config["adaptive_sigma_max"].as<float>();
     if (config["adaptive_passes"]) render_config.adaptive_passes = config["adaptive_passes"].as<int>();
+    if (config["adaptive_importance_smoothing_radius"]) render_config.adaptive_importance_smoothing_radius = config["adaptive_importance_smoothing_radius"].as<int>();
     if (config["rpf_shrinkage_scale"]) render_config.rpf_shrinkage_scale = config["rpf_shrinkage_scale"].as<float>();
-    if (config["sensitivity_match_threshold"]) render_config.sensitivity_match_threshold = config["sensitivity_match_threshold"].as<float>();
+    if (config["rpf_confidence_samples"]) render_config.rpf_confidence_samples = config["rpf_confidence_samples"].as<float>();
     if (config["debug_statmc_outputs"]) render_config.debug_statmc_outputs = config["debug_statmc_outputs"].as<bool>();
+    if (render_config.image_width <= 0 || render_config.image_height <= 0) {
+        throw std::runtime_error("image_width and image_height must be positive");
+    }
+    if (render_config.samples_per_pixel <= 0) {
+        throw std::runtime_error("samples_per_pixel must be positive");
+    }
+    if (!std::isfinite(render_config.fov) || render_config.fov <= 0.0f || render_config.fov >= 180.0f) {
+        throw std::runtime_error("fov must be finite and in (0,180)");
+    }
+    if (!render_config.camera_position.allFinite() || !render_config.camera_direction.allFinite() ||
+        !render_config.camera_up.allFinite() || render_config.camera_direction.squaredNorm() <= EPS_SMALL ||
+        render_config.camera_up.squaredNorm() <= EPS_SMALL) {
+        throw std::runtime_error("Camera vectors must be finite and direction/up must be nonzero");
+    }
+    if (!std::isfinite(render_config.focus_distance) || render_config.focus_distance <= 0.0f) {
+        throw std::runtime_error("focus_distance must be finite and positive");
+    }
+    if (!std::isfinite(render_config.aperture) || render_config.aperture < 0.0f) {
+        throw std::runtime_error("aperture must be finite and non-negative");
+    }
     if (render_config.rpf_tile_size <= 0) {
         throw std::runtime_error("rpf_tile_size must be positive");
     }
-    if (render_config.rpf_target_samples == 0 || render_config.rpf_target_samples < -1) {
-        throw std::runtime_error("rpf_target_samples must be -1 or positive");
-    }
-    if (render_config.rpf_max_radius < 0) {
-        throw std::runtime_error("rpf_max_radius must be non-negative");
-    }
     if (render_config.color_window_radius <= 0) {
-        throw std::runtime_error("color.window_radius must be positive");
+        throw std::runtime_error("color_window_radius must be positive");
     }
-    if (render_config.color_normal_threshold <= 0.0f || render_config.color_normal_threshold > 1.0f) {
-        throw std::runtime_error("color.normal_threshold must be in (0,1]");
+    if (!std::isfinite(render_config.color_normal_threshold) || render_config.color_normal_threshold <= 0.0f || render_config.color_normal_threshold > 1.0f) {
+        throw std::runtime_error("color_normal_threshold must be finite and in (0,1]");
     }
-    if (render_config.color_depth_threshold < 0.0f) {
-        throw std::runtime_error("color.depth_threshold must be non-negative");
+    if (!std::isfinite(render_config.color_depth_threshold) || render_config.color_depth_threshold < 0.0f) {
+        throw std::runtime_error("color_depth_threshold must be finite and non-negative");
     }
-    if (render_config.color_compat_alpha <= 0.0f || render_config.color_compat_alpha >= 1.0f) {
-        throw std::runtime_error("color.compat_alpha must be in (0,1)");
+    if (!std::isfinite(render_config.color_compat_alpha) || render_config.color_compat_alpha <= 0.0f || render_config.color_compat_alpha >= 1.0f) {
+        throw std::runtime_error("color_compat_alpha must be finite and in (0,1)");
     }
-    if (render_config.color_shrinkage_k <= 0.0f) {
-        throw std::runtime_error("color.shrinkage_k must be positive");
+    if (!std::isfinite(render_config.color_sigma_max) || render_config.color_sigma_max <= 0.0f) {
+        throw std::runtime_error("color_sigma_max must be finite and positive");
     }
     if (render_config.var_window_radius <= 0) {
-        throw std::runtime_error("var.window_radius must be positive");
+        throw std::runtime_error("var_window_radius must be positive");
     }
-    if (render_config.var_normal_threshold <= 0.0f || render_config.var_normal_threshold > 1.0f) {
-        throw std::runtime_error("var.normal_threshold must be in (0,1]");
+    if (!std::isfinite(render_config.var_normal_threshold) || render_config.var_normal_threshold <= 0.0f || render_config.var_normal_threshold > 1.0f) {
+        throw std::runtime_error("var_normal_threshold must be finite and in (0,1]");
     }
-    if (render_config.var_depth_threshold < 0.0f) {
-        throw std::runtime_error("var.depth_threshold must be non-negative");
+    if (!std::isfinite(render_config.var_depth_threshold) || render_config.var_depth_threshold < 0.0f) {
+        throw std::runtime_error("var_depth_threshold must be finite and non-negative");
     }
-    if (render_config.var_compat_sigma <= 0.0f) {
-        throw std::runtime_error("var.compat_sigma must be positive");
+    if (!std::isfinite(render_config.var_compat_sigma) || render_config.var_compat_sigma <= 0.0f) {
+        throw std::runtime_error("var_compat_sigma must be finite and positive");
     }
-    if (render_config.var_shrinkage_k <= 0.0f) {
-        throw std::runtime_error("var.shrinkage_k must be positive");
+    if (!std::isfinite(render_config.var_shrinkage_k) || render_config.var_shrinkage_k <= 0.0f) {
+        throw std::runtime_error("var_shrinkage_k must be finite and positive");
     }
     if (render_config.adaptive_base_samples < 0) {
         throw std::runtime_error("adaptive_base_samples must be non-negative");
@@ -140,20 +172,26 @@ inline RenderConfig parse_render_config(const YAML::Node& config) {
     if (render_config.adaptive_spp < 0) {
         throw std::runtime_error("adaptive_spp must be non-negative");
     }
-    if (render_config.adaptive_sigma_max <= 0.0f) {
-        throw std::runtime_error("adaptive_sigma_max must be positive");
+    if (render_config.adaptive_base_samples > render_config.adaptive_spp) {
+        throw std::runtime_error("adaptive_base_samples cannot exceed adaptive_spp");
+    }
+    if (!std::isfinite(render_config.adaptive_sigma_max) || render_config.adaptive_sigma_max <= 0.0f) {
+        throw std::runtime_error("adaptive_sigma_max must be finite and positive");
     }
     if (render_config.adaptive_passes < 0) {
         throw std::runtime_error("adaptive_passes must be non-negative");
     }
+    if (render_config.adaptive_importance_smoothing_radius < 0) {
+        throw std::runtime_error("adaptive_importance_smoothing_radius must be non-negative");
+    }
     if (render_config.var_iterations <= 0) {
-        throw std::runtime_error("var.iterations must be positive");
+        throw std::runtime_error("var_iterations must be positive");
     }
-    if (render_config.rpf_shrinkage_scale < 0.0f) {
-        throw std::runtime_error("rpf_shrinkage_scale must be non-negative");
+    if (!std::isfinite(render_config.rpf_shrinkage_scale) || render_config.rpf_shrinkage_scale < 0.0f) {
+        throw std::runtime_error("rpf_shrinkage_scale must be finite and non-negative");
     }
-    if (render_config.sensitivity_match_threshold < 0.0f) {
-        throw std::runtime_error("sensitivity_match_threshold must be non-negative");
+    if (!std::isfinite(render_config.rpf_confidence_samples) || render_config.rpf_confidence_samples <= 0.0f) {
+        throw std::runtime_error("rpf_confidence_samples must be finite and positive");
     }
     if (config["tonemap"]) {
         render_config.tonemap = config["tonemap"].as<std::string>();

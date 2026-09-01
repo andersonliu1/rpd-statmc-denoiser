@@ -66,16 +66,13 @@ inline Scene make_cornell_box() {
     add_light_tri(l0, l2, l1);
     add_light_tri(l0, l3, l2);
 
-    // Floor and ceiling
     add_quad(cbox_point(552.8f, 0.0f, 0.0f), cbox_point(0.0f, 0.0f, 0.0f), cbox_point(0.0f, 0.0f, 559.2f), cbox_point(549.6f, 0.0f, 559.2f), bottom_id, room_center, true);
     add_quad(cbox_point(556.0f, 548.8f, 0.0f), cbox_point(556.0f, 548.8f, 559.2f), cbox_point(0.0f, 548.8f, 559.2f), cbox_point(0.0f, 548.8f, 0.0f), top_id, room_center, true);
 
-    // Walls
     add_quad(cbox_point(549.6f, 0.0f, 559.2f), cbox_point(0.0f, 0.0f, 559.2f), cbox_point(0.0f, 548.8f, 559.2f), cbox_point(556.0f, 548.8f, 559.2f), back_id, room_center, true);
     add_quad(cbox_point(0.0f, 0.0f, 559.2f), cbox_point(0.0f, 0.0f, 0.0f), cbox_point(0.0f, 548.8f, 0.0f), cbox_point(0.0f, 548.8f, 559.2f), right_id, room_center, true);
     add_quad(cbox_point(552.8f, 0.0f, 0.0f), cbox_point(549.6f, 0.0f, 559.2f), cbox_point(556.0f, 548.8f, 559.2f), cbox_point(556.0f, 548.8f, 0.0f), left_id, room_center, true);
 
-    // Short box
     Vec3f sb0 = cbox_point(130.0f, 0.0f, 65.0f);
     Vec3f sb1 = cbox_point(82.0f, 0.0f, 225.0f);
     Vec3f sb2 = cbox_point(240.0f, 0.0f, 272.0f);
@@ -92,7 +89,6 @@ inline Scene make_cornell_box() {
     add_quad(sb2, sb6, sb5, sb1, short_box_mat_id, short_box_center, false);
     add_quad(sb1, sb5, sb4, sb0, short_box_mat_id, short_box_center, false);
 
-    // Tall box
     Vec3f tb0 = cbox_point(423.0f, 0.0f, 247.0f);
     Vec3f tb1 = cbox_point(265.0f, 0.0f, 296.0f);
     Vec3f tb2 = cbox_point(314.0f, 0.0f, 456.0f);
@@ -112,4 +108,4 @@ inline Scene make_cornell_box() {
     return scene;
 }
 
-} // namespace scenes
+}

@@ -9,12 +9,10 @@
 
 namespace scenes {
 
-// Classic Veach Multiple Importance Sampling test scene
 inline Scene make_veach_mis() {
     Scene scene;
     scene.environment_color = Vec3f(0.02f, 0.02f, 0.02f);
 
-    // Create materials with varying roughness
     Microfacet glossy_smooth = {
         .albedo = Vec3f(0.9f, 0.9f, 0.9f),
         .roughness = 0.001f,
@@ -54,13 +52,11 @@ inline Scene make_veach_mis() {
     const int ground_id = scene.add_material(Material{Lambertian{Vec3f(0.3f, 0.3f, 0.3f)}});
     const int light_mat_id = scene.add_material(Material{Lambertian{Vec3f(1.0f, 1.0f, 1.0f)}});
 
-    // Add ground plane
     auto ground = make_ground_plane(20.0f, 0.0f, ground_id);
     for (const auto& tri : ground) {
         scene.add_triangle(tri);
     }
 
-    // Add 4 spheres with increasing roughness
     const float sphere_radius = 0.5f;
     const float sphere_y = sphere_radius;
     const float spacing = 2.0f;
@@ -78,7 +74,6 @@ inline Scene make_veach_mis() {
         scene.add_sphere(sphere);
     }
 
-    // Add 4 rectangular area lights with varying sizes
     const float lights_y = 3.0f;
     const float lights_z = -2.0f;
     std::array<float, 4> light_sizes = {1.2f, 0.6f, 0.3f, 0.15f};
@@ -112,4 +107,4 @@ inline Scene make_veach_mis() {
     return scene;
 }
 
-} // namespace scenes
+}
