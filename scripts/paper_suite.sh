@@ -178,7 +178,7 @@ done
 {
     printf '\\begin{table*}[t]\n'
     printf '\\centering\n'
-    printf '\\caption{Dual-reference paired evaluation. Squared-error metrics combine each reference pair before taking roots; Log-SSIM and gradient NRMSE are averaged directly. Values are mean $\\pm$ 95\\%% CI across seeds.}\n'
+    printf '\\caption{Dual-reference paired evaluation at RPD scale $\\lambda=%s$. Squared-error metrics combine each reference pair before taking roots; Log-SSIM and gradient NRMSE are averaged directly. Values are mean $\\pm$ 95\\%% CI across seeds.}\n' "$render_rpd_scale"
     printf '\\label{tab:generated-metrics}\n'
     printf '\\begin{tabular}{llrrrr}\n'
     printf '\\toprule\n'
@@ -192,7 +192,7 @@ done
     printf '\\end{table*}\n'
     printf '\n\\begin{table*}[t]\n'
     printf '\\centering\n'
-    printf '\\caption{Paired contribution of RPD relative to StatMC without RPD. Positive quality deltas favor RPD; runtime ratios above one indicate added cost. Values are mean $\\pm$ 95\\%% CI across seeds.}\n'
+    printf '\\caption{Paired contribution of RPD at $\\lambda=%s$ relative to StatMC without RPD. Positive quality deltas favor RPD; runtime ratios above one indicate added cost. Values are mean $\\pm$ 95\\%% CI across seeds.}\n' "$render_rpd_scale"
     printf '\\label{tab:generated-rpd-ablation}\n'
     printf '\\begin{tabular}{lrrrrr}\n'
     printf '\\toprule\n'
